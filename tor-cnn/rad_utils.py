@@ -1,0 +1,415 @@
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+import datetime
+from NWSColorMaps import NWSColorMaps
+from geopy.distance import geodesic
+from geopy.point import Point
+import math
+import os
+NWScmap = NWSColorMaps()
+
+def plot_ppi(file_path,
+             varname,
+             rangemax=300,
+             Xlat=None,
+             Xlon=None,
+):
+    """
+    Plots a PPI from WDSS2-decoded netcdfs.
+    Args:
+    - file_path (str): full path to the netcdf
+    - varname (str): variable name
+    - rangemax (int): the maximum range to plot, in km from radar
+    - Xlat (float or None): An optional latitude to plot
+    - Xlon (float or None): An optional longitude to plot
+    
+    """
+
+    try:
+        # Open the netCDF file using xarray
+        ds = xr.open_dataset(file_path)
+    
+        # Extract the data
+        raddata = ds[varname].values
+        azimuth = ds['Azimuth'].values
+        gate_width = ds['GateWidth'].values.mean() # Assuming GateWidth is relatively constant
+        range_to_first_gate = ds.attrs['RangeToFirstGate']
+        radar_name = ds.attrs['radarName-value'] 
+
+        # Calculate radial distances (r) for each gate
+        # The 'Gate' dimension represents the index of the gate, not the actual distance.
+        # We need to calculate the distance for each gate based on RangeToFirstGate and GateWidth.
+        # The provided ncdump shows Gate=1832 and RangeToFirstGate=2125.
+        # Let's assume the gate values are 0-indexed.
+        # The distance to each gate can be calculated as RangeToFirstGate + (gate_index * GateWidth)
+        # However, GateWidth is a variable with Azimuth dimension. For a simple plot,
+        # we can take the mean GateWidth, or if more precision is needed, handle
+        # the varying gate width per azimuth. For now, let's use the mean.
+    
+        # Create an array of gate distances (r)
+        gates = np.arange(ds.dims['Gate'])
+        r_meters = range_to_first_gate + (gates * gate_width)
+    
+        # Convert azimuth from degrees to radians for Matplotlib's polar plot
+        # Azimuth angles typically go from 0 to 360.
+        theta = np.deg2rad(azimuth)
+    
+        # Handle potential missing data values if needed
+        # The ncdump shows MissingData = -99900.f and RangeFolded = -99901.f
+        missing_data_value = ds.attrs.get('MissingData', -99900.0)
+        range_folded_value = ds.attrs.get('RangeFolded', -99901.0)
+    
+        # Replace missing values with NaN for plotting
+        rad_masked = np.where(raddata == missing_data_value, np.nan, raddata)
+        rad_masked = np.where(rad_masked == range_folded_value, np.nan, rad_masked)
+   
+        # Find the index where the range exceeds the limit
+        max_range_index = np.where(r_meters > rangemax * 1000)[0] # Convert km to meters for comparison
+
+        if len(max_range_index) > 0:
+            # Use the index of the first gate that exceeds the limit
+            end_gate_index = max_range_index[0]
+            r_meters_limited = r_meters[:end_gate_index]
+            rad_masked_limited = rad_masked[:, :end_gate_index]
+        else:
+            # If all gates are within the limit, use the full data
+            r_meters_limited = r_meters
+            rad_masked_limited = rad_masked 
+   
+        # Convert the limited range to kilometers
+        r_km_limited = r_meters_limited / 1000.0
+ 
+        # Create the polar plot
+        fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(10, 8))
+    
+        # Use pcolormesh for a 2D color plot in polar coordinates
+        # theta should be 2D, r should be 2D for pcolormesh to work correctly
+        # We need to broadcast theta and r to match the shape of raddata
+        R, THETA = np.meshgrid(r_km_limited, theta)
+    
+        # Plot the radar data
+        if varname == 'Reflectivity':
+            cmap = NWScmap; vmin=-10; vmax=75
+        elif varname == 'AzShear':
+            cmap = 'bwr'; vmin=-0.006; vmax=0.006
+        elif varname == 'DivShear':
+            cmap = 'PiYG'; vmin=-0.006; vmax=0.006
+        elif varname == 'Velocity' or varname == 'AliasedVelocity':
+            cmap = 'PiYG'; vmin=-50; vmax=50
+        c = ax.pcolormesh(THETA, R, rad_masked_limited, cmap=cmap, vmin=vmin, vmax=vmax)
+    
+        # Plot an X at the given location
+        if Xlat is not None and Xlon is not None:
+            azimuth_idx, gate_idx, calc_az, calc_range = get_azimuth_range_from_latlon(Xlat, Xlon, ds=ds)
+            calc_range /= 1000 # convert to km
+            calc_az_rad = math.radians(calc_az)
+            plt.plot(calc_az_rad, calc_range, markersize=10, marker='x', color='black')
+            print(azimuth_idx, gate_idx, calc_az, calc_range) 
+
+        # Add a colorbar
+        cbar = fig.colorbar(c, ax=ax, orientation='vertical', pad=0.1)
+        cbar.set_label(f'{varname} ({ds[varname].units})')
+    
+        # Set plot properties
+        ax.set_theta_zero_location('N')  # North at the top
+        ax.set_theta_direction(-1)      # Clockwise direction (standard for radar)
+    
+        # Customize radial ticks (range)
+        ax.set_rlabel_position(90) # Position of the radial labels
+        ax.set_ylabel(f'Range (km)', labelpad=30) # Label for radial axis
+    
+        # Set custom radial ticks for kilometers
+        # You can choose appropriate tick values, e.g., every 50 km up to rangemax
+        # Using np.arange(0, rangemax + 1, 50) will create ticks at 0, 50, 100, ..., 300 km
+        r_ticks = np.arange(0, rangemax + 1, 50)
+        ax.set_rticks(r_ticks)
+        ax.set_rlim(0, rangemax) # Ensure the plot limits are also set to rangemax
+
+        # Customize angular ticks (azimuth)
+        ax.set_xticks(np.deg2rad(np.arange(0, 360, 30)))
+        ax.set_xticklabels([f'{a}°' for a in np.arange(0, 360, 30)])
+    
+        # Set title
+        scan_time = ds.attrs['Time']
+        dt_object = datetime.datetime.fromtimestamp(scan_time)
+        ax.set_title(f'{radar_name} {varname} PPI (Elevation: {ds.attrs["Elevation"]}{ds.attrs["ElevationUnits"]})\nTime: {dt_object}', va='bottom')
+    
+        plt.show()
+    
+        # Close the dataset
+        ds.close()
+    
+    except FileNotFoundError:
+        print(f"Error: File not found at {file_path}")
+    #except KeyError as e:
+    #    print(f"Error: Missing expected variable or attribute: {e}")
+    #except Exception as e:
+    #    print(f"An unexpected error occurred: {e}")
+
+
+#-------------------------------------------------------------------------------------------------------------
+
+# --- Functions for radar geometry (accounting for Earth's curvature) ---
+# These equations convert ground range to slant range (and vice-versa)
+# based on a simplified Earth model with a constant effective Earth radius.
+# For more advanced radar applications, consider libraries like Py-ART
+# or wradlib which have robust georeferencing modules.
+
+def ground_range_to_slant_range(ground_range, radar_height_m, elevation_deg, earth_radius_m=6371000):
+    """
+    Converts ground range to slant range, accounting for Earth's curvature.
+    Assumes a standard atmospheric refraction (4/3 Earth radius model usually).
+    """
+    elevation_rad = np.deg2rad(elevation_deg)
+    # The effective Earth radius is often scaled by 4/3 for atmospheric refraction
+    # This is a common approximation in radar meteorology
+    Re = earth_radius_m * (4/3)
+
+    a = ground_range**2 + (radar_height_m / np.cos(elevation_rad))**2
+    b = 2 * ground_range * (radar_height_m / np.cos(elevation_rad))
+    slant_range_squared = a + b * np.sin(elevation_rad)
+    
+    # A more common, simpler formula for slant range given ground range and elevation
+    # is often approximated directly from trigonometry after accounting for curvature.
+    # Let's use a more direct geometric approach for slant range:
+    
+    # Height of target above radar level for a given ground range and elevation
+    # This formula is for height from radar, accounting for beam path
+    target_height_above_radar = ground_range * np.tan(elevation_rad) + \
+                                ground_range**2 / (2 * Re * np.cos(elevation_rad)**2)
+
+    # Slant range from Pythagorean theorem, considering target height above radar
+    slant_range = np.sqrt(ground_range**2 + (target_height_above_radar + radar_height_m)**2)
+    
+    # A simpler approximation for slant range from ground range:
+    # This often doesn't explicitly involve radar_height_m in the direct slant calculation
+    # but instead computes the slant range given the ground range and elevation.
+    # We need to compute the straight line distance from radar to target.
+    # This is often done by converting ground range and elevation into Cartesian coordinates.
+    
+    # Let's use a simpler and more standard formula for slant range (r) from ground range (d)
+    # and elevation angle (phi) and radar height (h_radar)
+    # r = sqrt(d^2 + (h_radar + h_target_above_ground)^2)
+    # where h_target_above_ground is what the beam is at given d and phi.
+    
+    # A more direct calculation that's simpler for our purpose if we have ground range and elevation
+    # This involves solving for the straight-line distance (slant range)
+    
+    # Let's use the formula from Py-ART documentation for range from ground range and elevation:
+    # d = horizontal distance, h = radar height, R = earth radius
+    # slant_range = ((d**2 + (h + 0.5 * d**2 / Re)**2) / np.cos(elevation_rad)**2) ** 0.5
+    
+    # Given ground_range, radar_height_m, elevation_deg
+    # The slant range (r) can be approximated as:
+    # r = ground_range / cos(elevation_rad) for flat earth, or
+    # r = sqrt( (ground_range)**2 + (h_radar + h_beam_at_ground_range)**2 )
+    # where h_beam_at_ground_range includes earth curvature.
+    
+    # For a low elevation angle (0.5 deg), the ground range is very close to the slant range.
+    # Let's use the simplest approximation which is usually sufficient for low elevations:
+    # slant_range is approximately equal to ground_range for PPI unless very high elevation.
+    # However, for correct indexing, we need the *actual* slant range that the radar measured.
+    # We need to find the slant range *corresponding* to the ground range and elevation.
+
+    # Re-evaluating based on common radar geometry:
+    # Given radar height H, elevation angle E, and slant range R.
+    # Ground Range D = R * cos(E)
+    # Height above flat ground h = H + R * sin(E)
+    # With earth curvature:
+    # D = (R * cos(E)) - (R**2 * sin(E) / (2 * Re)) approximately. This is hard to invert.
+
+    # A more practical approach: Given a (target_lat, target_lon) and radar_lat_lon_height,
+    # calculate the ground distance and the initial bearing (azimuth).
+    # Then, we need to find the slant range that corresponds to this ground distance
+    # *at the given elevation angle*.
+
+    # For a PPI, the slant range is the primary measurement.
+    # We get a (lat, lon) for the target. We need to convert this to radar (range, azimuth).
+    # From radar (lat,lon,height) to target (lat,lon,height), we can get ground_range and azimuth.
+    # To get slant range, we need to consider the height of the target *if it were on the beam*.
+
+    # For simplicity, and given the data structure (no target height input),
+    # let's calculate the ground range (distance on Earth's surface) and assume
+    # the slant range is *approximately* the ground range for very low elevation scans.
+    # Then we will refine with a more common slant range approximation.
+
+    # Simpler formula for slant range (r) from ground distance (d) and elevation (el)
+    # This formula assumes a target is at a certain height above radar for a given ground distance
+    # and then computes the straight line distance.
+    # The actual slant range R from the radar to a point (d, h) where d is ground distance
+    # and h is height above radar, is sqrt(d^2 + h^2).
+    # For a ray at elevation E, the height above *flat* ground at distance d is d * tan(E).
+    # With earth curvature, the height of the beam above the radar horizon at ground range d is:
+    # h_beam = h_radar + d * tan(elevation_rad) - (d**2 / (2 * Re))
+    # Then slant range = sqrt(d**2 + (h_beam - h_radar)**2) if you want height relative to radar.
+    # Or, slant_range = sqrt(d**2 + h_beam**2) if h_beam is height above ground.
+
+    # Let's stick to the simplest: for low elevation, slant range is very close to ground range.
+    # For precise indexing, we need the actual slant range.
+    # We will compute the ground distance and assume elevation applies.
+    # The relationship between ground range (D), slant range (R), elevation angle (E),
+    # and effective Earth radius (Re) is often approximated as:
+    # R^2 = D^2 + (R * sin(E) + H_radar)^2 - (2 * R * sin(E) + H_radar) * (R**2 / (2 * Re)) (complex)
+
+    # Let's use a practical approximation for slant range from ground range for a PPI scan.
+    # The vertical distance the beam is from the radar is R_slant * sin(elevation_rad)
+    # The horizontal distance is R_slant * cos(elevation_rad)
+    # Ground range = R_slant * cos(elevation_rad) + R_slant^2 / (2 * Re) * sin(elevation_rad) -- too complex
+    
+    # Simplest valid approach for low elevations:
+    # For a PPI scan, the 'range' stored in the NetCDF is often the slant range directly measured by the radar.
+    # So we need to calculate the ground distance from target to radar, and then infer the slant range.
+    
+    # We can estimate slant range from ground range and radar height:
+    # If the ground range is `d_ground`, and radar height `h_radar`, and elevation `el_rad`.
+    # A rough estimate for slant range `R_slant` is `d_ground / cos(el_rad)`.
+    # This is a flat earth approximation, but for low angles and typical ranges, it's often close enough
+    # for finding the *nearest* gate index.
+    
+    # For the purpose of finding the nearest gate index, it's best to compute the distance
+    # between the radar (lat, lon) and the target (lat, lon) directly as the ground range,
+    # and then adjust this for the fixed elevation angle to get an approximate slant range.
+    
+    # Using simple trigonometry for slant range (hypotenuse) from ground range (adjacent)
+    # and vertical displacement (opposite). We need height of beam at ground range.
+    # Effective Earth radius
+    k = 4/3 # standard atmospheric refraction factor
+    Re_eff = earth_radius_m * k
+
+    # Height of beam above radar at ground range (d_ground)
+    # This is the height of the beam center relative to the radar.
+    h_beam_above_radar = (ground_range * np.tan(elevation_rad)) + \
+                         (ground_range**2 / (2 * Re_eff))
+
+    # Slant range is the hypotenuse
+    slant_range = np.sqrt(ground_range**2 + h_beam_above_radar**2)
+    
+    return slant_range
+
+#----------------------------------------------------------------------------------------------------------------------
+
+def calculate_initial_bearing(lat1, lon1, lat2, lon2):
+    """
+    Calculates the initial bearing (azimuth) from point 1 to point 2.
+    Returns bearing in degrees, 0-360, where 0 is North, 90 East.
+    """
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+
+    delta_lon = lon2_rad - lon1_rad
+
+    x = math.sin(delta_lon) * math.cos(lat2_rad)
+    y = math.cos(lat1_rad) * math.sin(lat2_rad) - \
+        math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon)
+
+    initial_bearing_rad = math.atan2(x, y)
+    initial_bearing_deg = math.degrees(initial_bearing_rad)
+    
+    # Ensure bearing is in 0-360 range
+    return (initial_bearing_deg + 360) % 360
+
+#--------------------------------------------------------------------------------------------------------------------------
+
+def get_azimuth_range_from_latlon(
+    target_lat,
+    target_lon,
+    ds=None,
+    file_path=None,
+    print_test=False,
+):
+
+    if file_path is not None:
+        # Open the netCDF file
+        ds = xr.open_dataset(file_path)
+    elif ds is None:
+        raise ValueError("ds is None")
+
+    # --- 1. Get Radar Location ---
+    radar_lat = ds.attrs['Latitude']
+    radar_lon = ds.attrs['Longitude']
+    radar_height_m = ds.attrs['Height']
+    elevation_deg = ds.attrs['Elevation'] # Fixed elevation for this PPI scan
+
+    radar_point = Point(radar_lat, radar_lon)
+    target_point = Point(target_lat, target_lon)
+
+    # --- 2. Calculate Distance and Azimuth from Radar to Target ---
+    # Geodesic distance (shortest distance on the surface of the ellipsoid)
+    # This gives ground distance
+    ground_distance_m = geodesic(radar_point, target_point).meters
+
+    # Calculate azimuth (bearing) from radar to target
+    calculated_azimuth_deg = calculate_initial_bearing(radar_lat, radar_lon, target_lat, target_lon)
+
+    # --- 3. Account for Earth Curvature (Slant Range) ---
+    # Convert ground distance to slant range using the approximate function
+    # This step is crucial because the 'Gate' dimension corresponds to slant range measurements.
+    calculated_slant_range_m = ground_range_to_slant_range(ground_distance_m, radar_height_m, elevation_deg)
+
+    # --- 4. Find Nearest Azimuth Index ---
+    # Get the azimuth values from the dataset
+    azimuths_data = ds['Azimuth'].values
+
+    # Find the index of the closest azimuth in the dataset
+    azimuth_index = np.argmin(np.abs(azimuths_data - calculated_azimuth_deg))
+    closest_azimuth = azimuths_data[azimuth_index]
+
+    # --- 5. Find Nearest Gate Index ---
+    # First, reconstruct the range (distance) for each gate in meters, as done for plotting.
+    # Use the mean GateWidth for simplicity, or if GateWidth varies per azimuth,
+    # you might need to find the appropriate GateWidth for the found azimuth_index.
+    # For now, let's use the average.
+    gate_width = ds['GateWidth'].values.mean()
+    range_to_first_gate = ds.attrs['RangeToFirstGate']
+    
+    # Reconstruct the slant ranges corresponding to each gate index
+    # (these are the 'r' values used in plotting)
+    all_gate_slant_ranges_m = range_to_first_gate + (np.arange(ds.dims['Gate']) * gate_width)
+
+    # Find the index of the closest gate (range) in the dataset
+    gate_index = np.argmin(np.abs(all_gate_slant_ranges_m - calculated_slant_range_m))
+    closest_gate_range = all_gate_slant_ranges_m[gate_index]
+
+    if print_test:
+        print(f"--- Radar Location ---")
+        print(f"Latitude: {radar_lat}, Longitude: {radar_lon}, Height: {radar_height_m} m")
+        print(f"Scan Elevation: {elevation_deg} degrees")
+        print(f"\n--- Target Location ---")
+        print(f"Target Latitude: {target_lat}, Target Longitude: {target_lon}")
+    
+        print(f"\n--- Calculated Values to Target ---")
+        print(f"Ground Distance: {ground_distance_m:.2f} meters")
+        print(f"Calculated Azimuth (from Radar to Target): {calculated_azimuth_deg:.2f} degrees")
+        print(f"Estimated Slant Range (accounting for curvature): {calculated_slant_range_m:.2f} meters")
+    
+        print(f"\n--- Found Indices ---")
+        print(f"Nearest Azimuth Index: {azimuth_index} (Actual Azimuth in data: {closest_azimuth:.2f} degrees)")
+        print(f"Nearest Gate Index: {gate_index} (Actual Slant Range in data: {closest_gate_range:.2f} meters)")
+    
+        # You can now access the reflectivity value at these indices:
+        reflectivity_at_point = ds['Reflectivity'].values[azimuth_index, gate_index]
+        print(f"Reflectivity at target location: {reflectivity_at_point:.2f} {ds['Reflectivity'].units}")
+
+    # Close the dataset, if we opened it
+    if file_path is not None:
+        ds.close()
+
+    return azimuth_index, gate_index, calculated_azimuth_deg, calculated_slant_range_m
+
+
+if __name__ == "__main__":
+    
+    #file_path = '/data/thea.sandmael/data/radar/20160509/KLSX/netcdf/Reflectivity/00.50/20160509-221256.netcdf'
+
+    # Mayfield, KY 12/11/21
+    #file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Velocity/00.50/20211211-032407.netcdf'
+    file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Reflectivity/00.50/20211211-032544.netcdf'
+    target_lat, target_lon = 36.74, -88.64
+
+    varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
+    plot_ppi(file_path, varname=varname, Xlat=target_lat, Xlon=target_lon)
+
+    #print_rad_val_at_latlon(file_path, target_lat, target_lon)

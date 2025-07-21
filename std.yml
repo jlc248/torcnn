@@ -1,0 +1,33 @@
+name: std
+channels:
+- conda-forge
+- defaults
+dependencies:
+- tensorflow
+- zarr
+- lightgbm
+- pyresample
+- cython
+- pygrib
+- h5py
+- hdf5
+- netcdf4
+- numpy
+- pytables
+- pandas
+- xarray
+- scikit-learn
+- scikit-image
+- imageio
+- scipy
+- matplotlib
+- pyproj
+- shapely
+- shap
+- geojson
+- pip
+- cartopy
+- pip:
+  - mysql.connector
+  - satpy
+  - geopy
