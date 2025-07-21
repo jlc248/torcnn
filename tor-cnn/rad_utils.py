@@ -9,11 +9,95 @@ import math
 import os
 NWScmap = NWSColorMaps()
 
+def plot_cartesian(file_path,
+                   varname,
+                   rangemax=300,
+                   Xlat=None,
+                   Xlon=None,
+):
+    """
+    Plots WDSS2-decoded netcdfs im cartesian coords.
+    Args:
+    - file_path (str): full path to the netcdf
+    - varname (str): variable name
+    - rangemax (int): the maximum range to plot, in km from radar
+    - Xlat (float or None): An optional latitude to plot
+    - Xlon (float or None): An optional longitude to plot
+    """
+
+    # Open the netCDF file using xarray
+    ds = xr.open_dataset(file_path)
+
+    # Extract the data
+    raddata = ds[varname].values
+    azimuth = ds['Azimuth'].values
+    gate_width = ds['GateWidth'].values.mean() # Assuming GateWidth is relatively constant
+    range_to_first_gate = ds.attrs['RangeToFirstGate']
+    radar_name = ds.attrs['radarName-value']
+
+    # Create an array of gate distances (r)
+    gates = np.arange(ds.dims['Gate'])
+    r_meters = range_to_first_gate + (gates * gate_width)
+
+    # Convert azimuth from degrees to radians for Matplotlib's polar plot
+    # Azimuth angles typically go from 0 to 360.
+    theta = np.deg2rad(azimuth)
+
+    # Handle potential missing data values if needed
+    # The ncdump shows MissingData = -99900.f and RangeFolded = -99901.f
+    missing_data_value = ds.attrs.get('MissingData', -99900.0)
+    range_folded_value = ds.attrs.get('RangeFolded', -99901.0)
+
+    # Replace missing values with NaN for plotting
+    rad_masked = np.where(raddata == missing_data_value, np.nan, raddata)
+    rad_masked = np.where(rad_masked == range_folded_value, np.nan, rad_masked)
+
+    # Find the index where the range exceeds the limit
+    max_range_index = np.where(r_meters > rangemax * 1000)[0] # Convert km to meters for comparison
+
+    if len(max_range_index) > 0:
+        # Use the index of the first gate that exceeds the limit
+        end_gate_index = max_range_index[0]
+        r_meters_limited = r_meters[:end_gate_index]
+        rad_masked_limited = rad_masked[:, :end_gate_index]
+    else:
+        # If all gates are within the limit, use the full data
+        r_meters_limited = r_meters
+        rad_masked_limited = rad_masked
+
+    # Convert the limited range to kilometers
+    r_km_limited = r_meters_limited / 1000.0
+
+    R, THETA = np.meshgrid(r_km_limited, theta)
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Set some plotting config
+    if varname == 'Reflectivity':
+        cmap = NWScmap; vmin=-10; vmax=75
+    elif varname == 'AzShear':
+        cmap = 'bwr'; vmin=-0.006; vmax=0.006
+    elif varname == 'DivShear':
+        cmap = 'PiYG'; vmin=-0.006; vmax=0.006
+    elif varname == 'Velocity' or varname == 'AliasedVelocity':
+        cmap = 'PiYG'; vmin=-50; vmax=50 
+
+    c = ax.pcolormesh(THETA, R, rad_masked_limited, cmap=cmap, vmin=vmin, vmax=vmax)
+   
+    # Add a colorbar
+    cbar = fig.colorbar(c, ax=ax, orientation='vertical', pad=0.1, shrink=0.75)
+    cbar.set_label(f'{varname} ({ds[varname].units})', fontsize=14) 
+   
+    plt.show()
+#-----------------------------------------------------------------------------------------------
+
 def plot_ppi(file_path,
              varname,
              rangemax=300,
              Xlat=None,
              Xlon=None,
+             window_size=None,
+             plot_segment=False
 ):
     """
     Plots a PPI from WDSS2-decoded netcdfs.
@@ -23,7 +107,8 @@ def plot_ppi(file_path,
     - rangemax (int): the maximum range to plot, in km from radar
     - Xlat (float or None): An optional latitude to plot
     - Xlon (float or None): An optional longitude to plot
-    
+    - window_size (int): +/- points from Xlat/Xlon in polar coordinates for segment plot 
+    - plot_segment (bool): Plot only the segment defined by Xlat, Xlon, and window_size
     """
 
     try:
@@ -83,11 +168,6 @@ def plot_ppi(file_path,
         # Create the polar plot
         fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(10, 8))
     
-        # Use pcolormesh for a 2D color plot in polar coordinates
-        # theta should be 2D, r should be 2D for pcolormesh to work correctly
-        # We need to broadcast theta and r to match the shape of raddata
-        R, THETA = np.meshgrid(r_km_limited, theta)
-    
         # Plot the radar data
         if varname == 'Reflectivity':
             cmap = NWScmap; vmin=-10; vmax=75
@@ -97,43 +177,180 @@ def plot_ppi(file_path,
             cmap = 'PiYG'; vmin=-0.006; vmax=0.006
         elif varname == 'Velocity' or varname == 'AliasedVelocity':
             cmap = 'PiYG'; vmin=-50; vmax=50
-        c = ax.pcolormesh(THETA, R, rad_masked_limited, cmap=cmap, vmin=vmin, vmax=vmax)
-    
-        # Plot an X at the given location
+
+        # Get center location, if desired
         if Xlat is not None and Xlon is not None:
             azimuth_idx, gate_idx, calc_az, calc_range = get_azimuth_range_from_latlon(Xlat, Xlon, ds=ds)
             calc_range /= 1000 # convert to km
             calc_az_rad = math.radians(calc_az)
-            plt.plot(calc_az_rad, calc_range, markersize=10, marker='x', color='black')
-            print(azimuth_idx, gate_idx, calc_az, calc_range) 
+
+            if plot_segment:
+                # Azimuth slicing (clamped, non-wrapping)
+                num_azimuths = len(theta)
+                start_az_slice = max(0, azimuth_idx - window_size)
+                end_az_slice = min(num_azimuths, azimuth_idx + window_size + 1) # +1 for exclusive end 
+
+                # Gate slicing (clamped)
+                num_gates_limited = len(r_km_limited)
+                start_gate_slice = max(0, gate_idx - window_size)
+                end_gate_slice = min(num_gates_limited, gate_idx + window_size + 1) # +1 for exclusive end
+
+                rad_to_plot = rad_masked_limited[start_az_slice:end_az_slice, start_gate_slice:end_gate_slice]
+                theta_to_plot = theta[start_az_slice:end_az_slice]
+                r_to_plot = r_km_limited[start_gate_slice:end_gate_slice]
+
+                # Set plot limits for the segment
+                r_plot_min = r_to_plot.min()
+                r_plot_max = r_to_plot.max()
+                theta_plot_min_deg = np.degrees(theta_to_plot.min())
+                theta_plot_max_deg = np.degrees(theta_to_plot.max())
+            else:
+                # Plot the full limited range
+                rad_to_plot = rad_masked_limited
+                theta_to_plot = theta
+                r_to_plot = r_km_limited
+
+                # Set plot limits for the full PPI
+                r_plot_min = 0
+                r_plot_max = rangemax
+                theta_plot_min_deg = 0
+                theta_plot_max_deg = 360 # For setting x-tick labels 
+
+        else:       
+            # Plot the full limited range
+            rad_to_plot = rad_masked_limited
+            theta_to_plot = theta
+            r_to_plot = r_km_limited
+
+            # Set plot limits for the full PPI
+            r_plot_min = 0
+            r_plot_max = rangemax
+            theta_plot_min_deg = 0
+            theta_plot_max_deg = 360 # For setting x-tick labels
+
+        # Use pcolormesh for a 2D color plot in polar coordinates
+        # theta should be 2D, r should be 2D for pcolormesh to work correctly
+        # We need to broadcast theta and r to match the shape of raddata
+        R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
+
+        c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax)
+        
+        if plot_segment:
+            # Hide gridlines, axis border, and tick labels
+            ax.grid(False)
+            ax.spines['polar'].set_visible(False)
+            ax.set_yticklabels([])
+            ax.set_xticklabels([])
+ 
+        # Plot an X at the given location
+        if Xlat is not None and Xlon is not None:
+            plt.plot(calc_az_rad, calc_range, markersize=15, marker='o', markeredgewidth=3,  markerfacecolor='none', color='black')
+            #print(azimuth_idx, gate_idx, calc_az, calc_range) 
 
         # Add a colorbar
-        cbar = fig.colorbar(c, ax=ax, orientation='vertical', pad=0.1)
-        cbar.set_label(f'{varname} ({ds[varname].units})')
+        cbar = fig.colorbar(c, ax=ax, orientation='vertical', pad=0.1, shrink=0.75)
+        cbar.set_label(f'{varname} ({ds[varname].units})', fontsize=14)
     
         # Set plot properties
         ax.set_theta_zero_location('N')  # North at the top
         ax.set_theta_direction(-1)      # Clockwise direction (standard for radar)
-    
+   
         # Customize radial ticks (range)
         ax.set_rlabel_position(90) # Position of the radial labels
         ax.set_ylabel(f'Range (km)', labelpad=30) # Label for radial axis
     
         # Set custom radial ticks for kilometers
-        # You can choose appropriate tick values, e.g., every 50 km up to rangemax
-        # Using np.arange(0, rangemax + 1, 50) will create ticks at 0, 50, 100, ..., 300 km
-        r_ticks = np.arange(0, rangemax + 1, 50)
-        ax.set_rticks(r_ticks)
-        ax.set_rlim(0, rangemax) # Ensure the plot limits are also set to rangemax
+        if plot_segment:
+            # Create a few ticks within the zoomed range
+            r_ticks = np.round(np.linspace(r_plot_min, r_plot_max, num=4, endpoint=True), 1)
+        else:
+            r_ticks = np.arange(0, rangemax + 1, 50)
 
-        # Customize angular ticks (azimuth)
-        ax.set_xticks(np.deg2rad(np.arange(0, 360, 30)))
-        ax.set_xticklabels([f'{a}°' for a in np.arange(0, 360, 30)])
+        # Customize angular ticks (azimuth) based on segment or full plot
+        if plot_segment:
+
+            # Set the sector
+            ax.set_thetamin(theta_plot_min_deg)
+            ax.set_thetamax(theta_plot_max_deg)
+           
+            # Dynamically calculate angular ticks for the segment
+            # Ensure degrees are within 0-360 range for display
+            start_az_deg = np.degrees(theta_to_plot.min()) % 360
+            end_az_deg = np.degrees(theta_to_plot.max()) % 360
+
+            # Rounded to nearest 5 or 10 degrees for readability
+            num_desired_ticks = 4
+            approx_interval = (end_az_deg - start_az_deg) / (num_desired_ticks - 1)
+            # Round interval to nearest nice number (e.g., 1, 2, 5, 10)
+            if approx_interval > 10:
+                tick_interval = round(approx_interval / 10) * 10
+            elif approx_interval > 5:
+                tick_interval = 5
+            elif approx_interval > 2:
+                tick_interval = 2
+            else:
+                tick_interval = 1
+            tick_interval = max(1, tick_interval) # Ensure it's at least 1
+
+            if abs(end_az_deg - start_az_deg) > 180:
+                az_fold = True
+                # Indicates that we cross the azimuth folding line (north)
+                left_flank = np.degrees(theta_to_plot[0])
+                right_flank = np.degrees(theta_to_plot[-1])
+                
+                # Transform these flanks so that they don't cross the folding line
+                left_flank_trans = 90 - (360 - left_flank) # assumes left flank is always in Q4
+                right_flank_trans = right_flank + 90
+                
+                # New interval
+                approx_interval = (right_flank_trans - left_flank_trans) / (num_desired_ticks - 1)
+                tick_interval = round(approx_interval / 10) * 10
+                transformed_ticks = np.arange(left_flank_trans, right_flank_trans, tick_interval)
+                
+                # Transform back to North being 0 degrees
+                azimuth_ticks = transformed_ticks - 90
+                azimuth_ticks[azimuth_ticks < 0] = 360 + azimuth_ticks[azimuth_ticks < 0]
+            else:
+                az_fold = False
+                azimuth_ticks = np.round(np.arange(start_az_deg, end_az_deg, tick_interval), 1)
+
+            azimuth_ticks_rad = np.deg2rad(azimuth_ticks)
+            
+            # Plot custom azimuth labels (lines and text)
+            for angle, label in zip(azimuth_ticks_rad, azimuth_ticks):
+                ax.plot([angle, angle], [r_plot_min, r_plot_max], color='black', linestyle=':', linewidth=0.8)
+                ax.text(angle, r_plot_max + 0.1, f'{int(round(label))}°', ha='center', va='bottom')
+            
+            # Plot custom range labels (arcs and text)
+            for r_val in r_ticks:
+                if az_fold:
+                    # Divide the line plotting over 0 degrees
+                    angles_for_label = np.linspace(azimuth_ticks_rad[0], np.deg2rad(360), 50)
+                    ax.plot(angles_for_label, np.full_like(angles_for_label, r_val), color='black', linestyle=':', linewidth=0.8)
+                    ax.text(theta_to_plot.max() + np.deg2rad(5), r_val, str(r_val), ha='left', va='center')
+                   
+                    angles_for_label = np.linspace(0, azimuth_ticks_rad[-1], 50)
+                    ax.plot(angles_for_label, np.full_like(angles_for_label, r_val), color='black', linestyle=':', linewidth=0.8)
+                    ax.text(theta_to_plot.max() + np.deg2rad(5), r_val, str(r_val), ha='left', va='center')
+                else:
+                    angles_for_label = np.linspace(theta_to_plot.min(), theta_to_plot.max(), 50)
+                    ax.plot(angles_for_label, np.full_like(angles_for_label, r_val), color='black', linestyle=':', linewidth=0.8)
+                    ax.text(theta_to_plot.max() + np.deg2rad(5), r_val, str(r_val), ha='left', va='center')
+ 
+            #ax.set_xticks(np.deg2rad(segment_azimuth_ticks))
+            #ax.set_xticklabels([f'{a:.0f}°' for a in segment_azimuth_ticks])
+
+            # Adjust radial limit to make space for labels 
+            #ax.set_rmax(r_plot_max + 0.2) 
+
+        else:
+            ax.set_xticks(np.deg2rad(np.arange(0, 360, 30)))
+            ax.set_xticklabels([f'{a}°' for a in np.arange(0, 360, 30)])
     
         # Set title
         scan_time = ds.attrs['Time']
         dt_object = datetime.datetime.fromtimestamp(scan_time)
-        ax.set_title(f'{radar_name} {varname} PPI (Elevation: {ds.attrs["Elevation"]}{ds.attrs["ElevationUnits"]})\nTime: {dt_object}', va='bottom')
+        ax.set_title(f'{radar_name} {varname} PPI (Elevation: {ds.attrs["Elevation"]} {ds.attrs["ElevationUnits"]})\nTime: {dt_object} UTC', va='bottom')
     
         plt.show()
     
@@ -181,95 +398,6 @@ def ground_range_to_slant_range(ground_range, radar_height_m, elevation_deg, ear
 
     # Slant range from Pythagorean theorem, considering target height above radar
     slant_range = np.sqrt(ground_range**2 + (target_height_above_radar + radar_height_m)**2)
-    
-    # A simpler approximation for slant range from ground range:
-    # This often doesn't explicitly involve radar_height_m in the direct slant calculation
-    # but instead computes the slant range given the ground range and elevation.
-    # We need to compute the straight line distance from radar to target.
-    # This is often done by converting ground range and elevation into Cartesian coordinates.
-    
-    # Let's use a simpler and more standard formula for slant range (r) from ground range (d)
-    # and elevation angle (phi) and radar height (h_radar)
-    # r = sqrt(d^2 + (h_radar + h_target_above_ground)^2)
-    # where h_target_above_ground is what the beam is at given d and phi.
-    
-    # A more direct calculation that's simpler for our purpose if we have ground range and elevation
-    # This involves solving for the straight-line distance (slant range)
-    
-    # Let's use the formula from Py-ART documentation for range from ground range and elevation:
-    # d = horizontal distance, h = radar height, R = earth radius
-    # slant_range = ((d**2 + (h + 0.5 * d**2 / Re)**2) / np.cos(elevation_rad)**2) ** 0.5
-    
-    # Given ground_range, radar_height_m, elevation_deg
-    # The slant range (r) can be approximated as:
-    # r = ground_range / cos(elevation_rad) for flat earth, or
-    # r = sqrt( (ground_range)**2 + (h_radar + h_beam_at_ground_range)**2 )
-    # where h_beam_at_ground_range includes earth curvature.
-    
-    # For a low elevation angle (0.5 deg), the ground range is very close to the slant range.
-    # Let's use the simplest approximation which is usually sufficient for low elevations:
-    # slant_range is approximately equal to ground_range for PPI unless very high elevation.
-    # However, for correct indexing, we need the *actual* slant range that the radar measured.
-    # We need to find the slant range *corresponding* to the ground range and elevation.
-
-    # Re-evaluating based on common radar geometry:
-    # Given radar height H, elevation angle E, and slant range R.
-    # Ground Range D = R * cos(E)
-    # Height above flat ground h = H + R * sin(E)
-    # With earth curvature:
-    # D = (R * cos(E)) - (R**2 * sin(E) / (2 * Re)) approximately. This is hard to invert.
-
-    # A more practical approach: Given a (target_lat, target_lon) and radar_lat_lon_height,
-    # calculate the ground distance and the initial bearing (azimuth).
-    # Then, we need to find the slant range that corresponds to this ground distance
-    # *at the given elevation angle*.
-
-    # For a PPI, the slant range is the primary measurement.
-    # We get a (lat, lon) for the target. We need to convert this to radar (range, azimuth).
-    # From radar (lat,lon,height) to target (lat,lon,height), we can get ground_range and azimuth.
-    # To get slant range, we need to consider the height of the target *if it were on the beam*.
-
-    # For simplicity, and given the data structure (no target height input),
-    # let's calculate the ground range (distance on Earth's surface) and assume
-    # the slant range is *approximately* the ground range for very low elevation scans.
-    # Then we will refine with a more common slant range approximation.
-
-    # Simpler formula for slant range (r) from ground distance (d) and elevation (el)
-    # This formula assumes a target is at a certain height above radar for a given ground distance
-    # and then computes the straight line distance.
-    # The actual slant range R from the radar to a point (d, h) where d is ground distance
-    # and h is height above radar, is sqrt(d^2 + h^2).
-    # For a ray at elevation E, the height above *flat* ground at distance d is d * tan(E).
-    # With earth curvature, the height of the beam above the radar horizon at ground range d is:
-    # h_beam = h_radar + d * tan(elevation_rad) - (d**2 / (2 * Re))
-    # Then slant range = sqrt(d**2 + (h_beam - h_radar)**2) if you want height relative to radar.
-    # Or, slant_range = sqrt(d**2 + h_beam**2) if h_beam is height above ground.
-
-    # Let's stick to the simplest: for low elevation, slant range is very close to ground range.
-    # For precise indexing, we need the actual slant range.
-    # We will compute the ground distance and assume elevation applies.
-    # The relationship between ground range (D), slant range (R), elevation angle (E),
-    # and effective Earth radius (Re) is often approximated as:
-    # R^2 = D^2 + (R * sin(E) + H_radar)^2 - (2 * R * sin(E) + H_radar) * (R**2 / (2 * Re)) (complex)
-
-    # Let's use a practical approximation for slant range from ground range for a PPI scan.
-    # The vertical distance the beam is from the radar is R_slant * sin(elevation_rad)
-    # The horizontal distance is R_slant * cos(elevation_rad)
-    # Ground range = R_slant * cos(elevation_rad) + R_slant^2 / (2 * Re) * sin(elevation_rad) -- too complex
-    
-    # Simplest valid approach for low elevations:
-    # For a PPI scan, the 'range' stored in the NetCDF is often the slant range directly measured by the radar.
-    # So we need to calculate the ground distance from target to radar, and then infer the slant range.
-    
-    # We can estimate slant range from ground range and radar height:
-    # If the ground range is `d_ground`, and radar height `h_radar`, and elevation `el_rad`.
-    # A rough estimate for slant range `R_slant` is `d_ground / cos(el_rad)`.
-    # This is a flat earth approximation, but for low angles and typical ranges, it's often close enough
-    # for finding the *nearest* gate index.
-    
-    # For the purpose of finding the nearest gate index, it's best to compute the distance
-    # between the radar (lat, lon) and the target (lat, lon) directly as the ground range,
-    # and then adjust this for the fixed elevation angle to get an approximate slant range.
     
     # Using simple trigonometry for slant range (hypotenuse) from ground range (adjacent)
     # and vertical displacement (opposite). We need height of beam at ground range.
@@ -408,8 +536,15 @@ if __name__ == "__main__":
     #file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Velocity/00.50/20211211-032407.netcdf'
     file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Reflectivity/00.50/20211211-032544.netcdf'
     target_lat, target_lon = 36.74, -88.64
+    window_size = 64 
 
     varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    plot_ppi(file_path, varname=varname, Xlat=target_lat, Xlon=target_lon)
-
+    plot_ppi(file_path,
+             varname=varname,
+             Xlat=target_lat,
+             Xlon=target_lon,
+             window_size=window_size,
+             rangemax=300,
+             plot_segment=True,
+    )
     #print_rad_val_at_latlon(file_path, target_lat, target_lon)
