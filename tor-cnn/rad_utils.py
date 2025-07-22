@@ -172,9 +172,9 @@ def plot_ppi(file_path,
     if varname == 'Reflectivity':
         cmap = NWScmap; vmin=-10; vmax=75
     elif varname == 'AzShear':
-        cmap = 'bwr'; vmin=-0.01; vmax=0.01
+        cmap = 'bwr'; vmin=-0.02; vmax=0.02
     elif varname == 'DivShear':
-        cmap = 'PiYG'; vmin=-0.01; vmax=0.01
+        cmap = 'PiYG'; vmin=-0.02; vmax=0.02
     elif varname == 'Velocity' or varname == 'AliasedVelocity':
         cmap = 'PiYG'; vmin=-50; vmax=50
     elif varname == 'SpectrumWidth':
@@ -551,8 +551,8 @@ if __name__ == "__main__":
     #file_path = '/data/thea.sandmael/data/radar/20160509/KLSX/netcdf/Reflectivity/00.50/20160509-221256.netcdf'
 
     # Mayfield, KY 12/11/21
-    #file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Velocity/00.50/20211211-032407.netcdf'
-    file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Zdr/00.50/20211211-032544.netcdf'
+    #file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/AzShear/00.50/20211211-032407.netcdf'
+    file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Reflectivity/00.50/20211211-032544.netcdf'
     target_lat, target_lon = 36.74, -88.64
     window_size = 64 
 
