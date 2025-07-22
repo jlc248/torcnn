@@ -180,11 +180,11 @@ def plot_ppi(file_path,
     elif varname == 'SpectrumWidth':
         cmap = 'cubehelix'; vmin=0; vmax=10
     elif varname == 'Zdr':
-        cmap = 'spectral'; vmin=-5; vmax=5
+        cmap = 'Spectral_r'; vmin=-5; vmax=5
     elif varname == 'RhoHV':
         cmap = 'rainbow'; vmin=0.45; vmax=1
     elif varname == 'PhiDP':
-        cmap = 'gnuplot2'; vmin=-1; vmax=7;
+        cmap = 'gnuplot2'; vmin=0; vmax=360;
 
     # Get center location, if desired
     if Xlat is not None and Xlon is not None:
@@ -379,12 +379,10 @@ def plot_ppi(file_path,
     dt_object = datetime.datetime.fromtimestamp(scan_time)
     ax.set_title(f'{radar_name} {varname} PPI (Elevation: {ds.attrs["Elevation"]} {ds.attrs["ElevationUnits"]})\nTime: {dt_object} UTC', va='bottom')
     
-    plt.show()
-    
     # Close the dataset
     ds.close()
     
-
+    return plt.gcf()
 #-------------------------------------------------------------------------------------------------------------
 
 # --- Functions for radar geometry (accounting for Earth's curvature) ---
@@ -553,13 +551,13 @@ if __name__ == "__main__":
     #file_path = '/data/thea.sandmael/data/radar/20160509/KLSX/netcdf/Reflectivity/00.50/20160509-221256.netcdf'
 
     # Mayfield, KY 12/11/21
-    file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Velocity/00.50/20211211-032407.netcdf'
-    #file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Reflectivity/00.50/20211211-032544.netcdf'
+    #file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Velocity/00.50/20211211-032407.netcdf'
+    file_path = '/work/thea.sandmael/radar/20211211/KPAH/netcdf/Zdr/00.50/20211211-032544.netcdf'
     target_lat, target_lon = 36.74, -88.64
     window_size = 64 
 
     varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    plot_ppi(file_path,
+    fig = plot_ppi(file_path,
              varname=varname,
              Xlat=target_lat,
              Xlon=target_lon,
@@ -567,4 +565,8 @@ if __name__ == "__main__":
              rangemax=100,
              plot_segment=True,
     )
+
+    figname = f'{varname}_{os.path.basename(file_path).split(".")[0]}.png'
+    plt.savefig(figname, dpi=300, bbox_inches="tight")
+    print(f'Saved {figname}')
     #print_rad_val_at_latlon(file_path, target_lat, target_lon)
