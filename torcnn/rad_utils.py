@@ -178,7 +178,6 @@ def plot_ppi(file_path,
 
         # Open the netCDF file using xarray
         ds = xr.open_dataset(file_path)
-        # Extract the data
         
         raddata = ds[varname].values
         azimuth = ds['Azimuth'].values
@@ -267,8 +266,8 @@ def plot_ppi(file_path,
                 start_gate_slice = max(0, gate_idx - window_size)
                 end_gate_slice = min(num_gates_limited, gate_idx + window_size + 1) # +1 for exclusive end
 
-                # Indicates that we're wrapping around 0 degrees
                 if end_az_slice > num_azimuths:
+                    # Indicates that we're wrapping around 0 degrees
                     rad_to_plot = np.concatenate([
                                     rad_masked_limited[start_az_slice:num_azimuths, start_gate_slice:end_gate_slice],
                                     rad_masked_limited[0:(end_az_slice-num_azimuths), start_gate_slice:end_gate_slice]
@@ -282,10 +281,24 @@ def plot_ppi(file_path,
                     # For ax.set_thetamin and ax.set_thetamax, we need to < 0 and > 0 points
                     theta_plot_min_deg = np.degrees(theta_to_plot[0])
                     theta_plot_max_deg = np.degrees(theta_to_plot[-1])
+                elif start_az_slice < 0:
+                    # Indicates that we're wrapping around 0 degrees
+                    rad_to_plot = np.concatenate([
+                                    rad_masked_limited[start_az_slice:, start_gate_slice:end_gate_slice],
+                                    rad_masked_limited[0:end_az_slice, start_gate_slice:end_gate_slice]
+                    ])
+                    theta_to_plot = np.concatenate([
+                                      theta[start_az_slice:],
+                                      theta[0:end_az_slice]
+                    ])
+
+                    # Set az plot limits for the segment
+                    theta_plot_min_deg = np.degrees(theta_to_plot[0])
+                    theta_plot_max_deg = np.degrees(theta_to_plot[-1])
                 else:    
                     rad_to_plot = rad_masked_limited[start_az_slice:end_az_slice, start_gate_slice:end_gate_slice]
                     theta_to_plot = theta[start_az_slice:end_az_slice]
-
+                    
                     # Set az plot limits for the segment
                     theta_plot_min_deg = np.degrees(theta_to_plot.min())
                     theta_plot_max_deg = np.degrees(theta_to_plot.max())
@@ -592,7 +605,7 @@ def get_azimuth_range_from_latlon(
 
     # Find the index of the closest gate (range) in the dataset
     gate_index = np.argmin(np.abs(all_gate_slant_ranges_m - calculated_slant_range_m))
-
+    
     if gate_index == (len(all_gate_slant_ranges_m) - 1):
         raise ValueError("Lat/lon not within this volume")
 
@@ -636,8 +649,8 @@ if __name__ == "__main__":
 
     # North of radar example
     #file_path = '/data/thea.sandmael/data/radar/20120220/KVNX/netcdf/Velocity/00.50/20120220-211430.netcdf'
-    #file_path = '/data/thea.sandmael/data/radar/20120220/KVNX/netcdf/Reflectivity/00.50/20120220-211412.netcdf'
-    #target_lat, target_lon = 37.29, -98.03
+    file_path = '/data/thea.sandmael/data/radar/20120220/KVNX/netcdf/Reflectivity/00.50/20120220-211412.netcdf'
+    target_lat, target_lon = 37.29, -98.03
     
     # 127 km away example
     #file_path = '/data/thea.sandmael/data/radar/20140618/KFSD/netcdf/Velocity/00.50/20140618-030239.netcdf'
@@ -656,13 +669,17 @@ if __name__ == "__main__":
     #target_lat, target_lon = 41.3, -94.51
 
     # 9-10 km away example
-    file_path = '/data/thea.sandmael/data/radar/20160524/KDDC/netcdf/Velocity/00.50/20160524-235541.netcdf'
-    target_lat, target_lon = 37.7922, -100.0695
+    #file_path = '/data/thea.sandmael/data/radar/20160524/KDDC/netcdf/Velocity/00.50/20160524-235541.netcdf'
+    #target_lat, target_lon = 37.7922, -100.0695
+
+    # EF4 example (KFWS)
+    file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230946.netcdf'
+    target_lat, target_lon = 32.55, -95.93
 
     window_size = 96
 
     #varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    varname = ['Reflectivity', 'Velocity'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
+    varname = ['Reflectivity', 'Velocity', 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
 
     fig, radar = plot_ppi(file_path,
                           varname=varname,
