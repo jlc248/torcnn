@@ -1,3 +1,9 @@
+import traceback
+import logging
+import functools
+import concurrent
+from collections import namedtuple
+from tqdm import tqdm
 import numpy as np
 import xarray as xr
 import os,sys
@@ -39,7 +45,7 @@ def get_sector_patch(lat, lon, ds, hs, varname):
     #radar_name = ds.attrs['radarName-value']
 
     # Create an array of gate distances (r)
-    gates = np.arange(radds.sizes['Gate'])
+    gates = np.arange(ds.sizes['Gate'])
     r_meters = range_to_first_gate + (gates * gate_width)
     r_km = r_meters / 1000. # convert to km
 
@@ -170,83 +176,78 @@ def create_example(channels):
     return tf.train.Example(features=tf.train.Features(feature=features))
 
 #--------------------------------------------------------------------------------------------------
+def collect_and_write_tfrec(row,
+                            hs,
+                            varnames,
+                            bsinfo,
+                            datapatt,
+                            outpatt,
+):
 
+    """
+    Collect the L2 radar data and write a TFRecord.
+    Args:
+        row (pandas Series or Frame): a row or data sample in the TORP dataset.
+        hs (int): halfsize of the patch
+        varnames (list): List of strings for the variable names
+        bsinfo (dict): contains min and max scaling values for each varname
+        datapatt (str): Full path data pattern. E.g., '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+        outpatt (str): Pattern for root outdir. E.g., '/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
+    """
+    if row['radar'] == '-99900':
+        return
 
-# Load torp dataset
-dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/')
-ds = dataset.load_dataframe()
-
-# Make EFU = -1
-ds.loc[ds.magnitude == 'U', 'magnitude'] = -1
-# Convert to numeric 
-ds.magnitude = pd.to_numeric(ds.magnitude)
-
-ds = ds[(ds.tornado == 1) & (ds.magnitude >= 4)]
-
-datapatt = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
-outpatt = '/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
-
-hs = halfsize = 96
-
-varnames = ['Velocity',
-            'AzShear',
-            'DivShear',
-            'SpectrumWidth',
-            'Reflectivity',
-            'RhoHV',
-            'PhiDP',
-            'Zdr',
-        #    'range',
-]
-
-# Get byte-scaling info
-bsinfo = utils.get_bsinfo()
-
-# Go through each row
-for index, row in ds.iterrows():
-
-    info = {} # contains predictor and target data, and metadata 
-    info['obj_lat'] = row.latitude
-    info['obj_lon'] = row.longitude
+    info = {} # contains predictor and target data, and metadata
+    info['obj_lat'] = row['latitude']
+    info['obj_lon'] = row['longitude']
     info['hs'] = hs
-    info['timestamp'] = row.radarTimestamp
-    info['tornado'] = row.tornado
-    info['hail'] = row.hail
-    info['wind'] = row.wind
-    info['spout'] = row.spout
-    info['durationMin'] = row.durationMin
-    info['rangeKm'] = row.rangeKm
-    info['radar'] = row.radar
-    info['state'] = row.state
-    info['county'] = row.county
-    info['CWA'] = row.CWA
-    info['stormType'] = row.stormType
-    info['minutesFromReport'] = row.minutesFromReport
-    info['preTornadoTracked'] = row.preTornadoTracked
-    info['distanceToNearestTornadoWithin1Hr'] = row.distanceToNearestTornadoWithin1Hr
-    info['magnitude'] = -1 if row.magnitude == 'U' else float(row.magnitude)
+    info['timestamp'] = row['radarTimestamp']
+    info['tornado'] = row['tornado']
+    info['hail'] = row['hail']
+    info['wind'] = row['wind']
+    info['spout'] = row['spout']
+    info['durationMin'] = row['durationMin']
+    info['rangeKm'] = row['rangeKm']
+    info['radar'] = row['radar']
+    info['state'] = row['state']
+    info['county'] = row['county']
+    info['CWA'] = row['CWA']
+    info['stormType'] = row['stormType']
+    info['minutesFromReport'] = row['minutesFromReport']
+    info['preTornadoTracked'] = row['preTornadoTracked']
+    info['distanceToNearestTornadoWithin1Hr'] = row['distanceToNearestTornadoWithin1Hr']
+    info['magnitude'] = -1 if row['magnitude'] == 'U' else float(row['magnitude'])
 
-    label = 'tor' if row.tornado == 1 else 'nontor'
+    if row['spout']:
+        label = 'spout'
+    elif row['tornado']:
+        label = 'tor'
+    else:
+        label = 'nontor'
 
     # Anchoring timestamp
-    raddt = datetime.strptime(row.radarTimestamp, '%Y%m%d-%H%M%S')
+    raddt = datetime.strptime(row['radarTimestamp'], '%Y%m%d-%H%M%S')
 
     for ii, varname in enumerate(varnames):
-        dpat = datapatt.replace('{radar}', row.radar).replace('{varname}', varname)
+        dpat = datapatt.replace('{radar}', row['radar']).replace('{varname}', varname)
         all_files = glob.glob(raddt.strftime(f"{os.path.dirname(dpat)}/*netcdf"))
         dts = [datetime.strptime(os.path.basename(ff), '%Y%m%d-%H%M%S.netcdf') for ff in all_files]
-        closest_dt = min(dts, key=lambda dt: abs(raddt - dt))
-        if abs(raddt - closest_dt).seconds > 180:
-            print(f"{raddt} is too far from {closest_dt}")
-            sys.exit(1)
+        try:
+            closest_dt = min(dts, key=lambda dt: abs(raddt - dt))
+        except ValueError:
+            logging.error(f"ValueError: no closest_dt, {row['radar']}, {row['radarTimestamp']}")
+            return
+        if abs(raddt - closest_dt).seconds > 600:
+            logging.error(f"{raddt} is too far from {closest_dt}. {row['radar']} - {varname}")
+            return
         idx = dts.index(closest_dt)
         file_path = all_files[idx]
 
         # Open the netCDF file using xarray
         radds = xr.open_dataset(file_path)
 
-        rad_sector, theta_sector, r_sector, az_idx, gate_idx = get_sector_patch(lat=row.latitude,
-                                                                                lon=row.longitude,
+        rad_sector, theta_sector, r_sector, az_idx, gate_idx = get_sector_patch(lat=row['latitude'],
+                                                                                lon=row['longitude'],
                                                                                 ds=radds,
                                                                                 hs=hs,
                                                                                 varname=varname
@@ -268,7 +269,7 @@ for index, row in ds.iterrows():
         range_folded_value = radds.attrs.get('RangeFolded', -99901.0)
         missing = (rad_sector == missing_data_value)
         range_folded = (rad_sector == range_folded_value)
-
+  
         # Bytescale the data
         rad_sector_scaled = np.expand_dims(utils.bytescale(rad_sector,
                                                            bsinfo[varname]['vmin'],
@@ -289,10 +290,86 @@ for index, row in ds.iterrows():
     # Write out the tfrec
     outdir = f"{raddt.strftime(outpatt)}/{label}"
     os.makedirs(outdir, exist_ok=True)
-    outfile = f"{outdir}/{row.radar}_{np.round(row.latitude,2)}_{np.round(row.longitude,2)}_{row.radarTimestamp}.tfrec"
+    outfile = f"{outdir}/{row['radar']}_{np.round(row['latitude'],2)}_{np.round(row['longitude'],2)}_{row['radarTimestamp']}.tfrec"
 
     with tf.io.TFRecordWriter(outfile) as writer:
         example = create_example(info)
         writer.write(example.SerializeToString())
 
-    print(outfile)
+    logging.info(outfile)
+
+#----------------------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------------------
+
+# Drive the parallel processing
+
+# Load torp dataset
+dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/')
+ds = dataset.load_dataframe()
+
+# Make EFU = -1
+ds.loc[ds.magnitude == 'U', 'magnitude'] = -1
+# Convert to numeric
+ds.magnitude = pd.to_numeric(ds.magnitude)
+
+#ds = ds[(ds.tornado == 1) & (ds.magnitude >= 4)]
+
+datapatt = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+outpatt = '/raid/jcintineo/torcnn/tfrecs2/%Y/%Y%m%d/'
+
+hs = halfsize = 96
+
+varnames = ['Velocity',
+            'AzShear',
+            'DivShear',
+            'SpectrumWidth',
+            'Reflectivity',
+            'RhoHV',
+            'PhiDP',
+            'Zdr',
+        #    'range',
+]
+
+# Get byte-scaling info
+bsinfo = utils.get_bsinfo()
+
+logger = logging.getLogger(__name__)
+logger.info(f"begin extract data and write TFRecords")
+
+# Common arguments to pass in
+# Do these varnames need to match those in the function?
+# I assume so. 
+collect_and_write_tfrec_args = dict(
+    hs=halfsize,
+    varnames=varnames,
+    bsinfo=bsinfo,
+    datapatt=datapatt,
+    outpatt=outpatt,
+)
+partial_collect_and_write_tfrec = functools.partial(collect_and_write_tfrec, **collect_and_write_tfrec_args)
+
+number_of_rows = len(ds)
+
+max_workers = 20 #min(gfs_columns_extract_workers, os.cpu_count())
+
+with tqdm(total=number_of_rows) as pbar: # progress bar
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+
+        for row in ds.itertuples():
+            # Convert the Pandas namedtuple-like object to a regular dictionary.
+            # This makes sure only simple, pickleable values are passed.
+            # You can also cherry-pick specific columns if 'row' has too many.
+            row_as_dict = row._asdict() # This converts it to an OrderedDict, which is pickleable
+            
+            futures.append(executor.submit(partial_collect_and_write_tfrec, row_as_dict))
+
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"Error processing a row: {e}")
+                logger.error(traceback.format_exc())
+            finally: 
+                pbar.update(1)
+

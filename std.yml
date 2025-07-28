@@ -28,6 +28,7 @@ dependencies:
 - pip
 - cartopy
 - pip:
+  - tqdm
   - mysql.connector
   - satpy
   - geopy
