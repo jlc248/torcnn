@@ -44,15 +44,15 @@ class TORPDataset:
                               f'{y}_{typ}_tilt0050_radar_r2500_nodup.csv')
                  for y in self._years
                 ]
-       
+
         dfs = [pd.read_csv(p, low_memory=False) for p in paths]
         
         df = pd.concat(dfs, axis=0)
     
         return df
         
-#dataset = TORPDataset(dirpath='/work2/mflora/torp_datasets/ML_data',
-                      #years=[2011, 2013, 2014]
+#dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/old', #'/work2/mflora/torp_datasets/ML_data',
+#                      years=[2011, 2013, 2014]
 #                     )
-
+#
 #dataset.load_dataframe()

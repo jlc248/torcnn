@@ -673,8 +673,8 @@ if __name__ == "__main__":
     #target_lat, target_lon = 37.7922, -100.0695
 
     # EF4 example (KFWS)
-    file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230946.netcdf'
-    target_lat, target_lon = 32.55, -95.93
+    file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
+    target_lat, target_lon = 32.51, -95.91
 
     window_size = 96
 

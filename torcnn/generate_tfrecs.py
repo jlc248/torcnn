@@ -198,25 +198,43 @@ def collect_and_write_tfrec(row,
         return
 
     info = {} # contains predictor and target data, and metadata
-    info['obj_lat'] = row['latitude']
-    info['obj_lon'] = row['longitude']
+    info['stormID'] = row['stormID']
     info['hs'] = hs
-    info['timestamp'] = row['radarTimestamp']
+    info['radarTimestamp'] = row['radarTimestamp']
     info['tornado'] = row['tornado']
     info['hail'] = row['hail']
     info['wind'] = row['wind']
-    info['spout'] = row['spout']
-    info['durationMin'] = row['durationMin']
-    info['rangeKm'] = row['rangeKm']
+    info['spout'] = row['spout']                                                    # landspout or waterspout
+    info['severeType'] = row['severeType']                                          # '-99900', 'Hail', 'Tornado', 'Wind'
+    info['tornadoWidth'] = row['tornadoWidth']
+    info['tornadoLength'] = row['tornadoLength']
+    info['durationMin'] = row['durationMin']                                        # Duration of the tornado in minutes
+    info['stormEventsReportID'] = row['stormEventsReportID']                        # From Storm Data: ID assigned by NWS for each individual storm event contained within a storm episode.
+    info['oneTorID'] = row['oneTorID']                                              # Common ID for all segments of a tornado. Same as the first segment's stormEventsReportID.
+                                                                                    # Code finds start and end points within one minute and 1 km of one another
+    try:
+        info['obj_lat'] = row['latitudeExtractCenter']
+        info['obj_lon'] = row['longiudeExtractCenter']
+        info['rangeExtractCenter'] = row['rangeExtractCenter']                      # Range from the radar for the storm object
+        info['distToExtractCenter'] = row['distToExtractCenter']                    # distance to a report, in meters
+    except KeyError:   # for pre-tornadic dataset
+        info['obj_lat'] = row['latitudeAzShearMax']
+        info['obj_lon'] = row['longiudeAzShearMax']
+        info['rangeExtractCenter'] = row['rangeAzShearMax']
+        info['distToExtractCenter'] = row['distToAzShearMax']
     info['radar'] = row['radar']
     info['state'] = row['state']
     info['county'] = row['county']
     info['CWA'] = row['CWA']
-    info['stormType'] = row['stormType']
-    info['minutesFromReport'] = row['minutesFromReport']
-    info['preTornadoTracked'] = row['preTornadoTracked']
-    info['distanceToNearestTornadoWithin1Hr'] = row['distanceToNearestTornadoWithin1Hr']
+    info['stormType'] = row['stormType']                                            
+    info['minutesFromReport'] = row['minutesFromReport']                            # The minimum minutes from either the start or end time of a report swath.
+    info['preTornadoTracked'] = row['preTornadoTracked']                            # was this stormID tracked pre-tornado?
+    info['overallWarningLeadtime'] = row['overallWarningLeadtime']
+    info['pointWarningLeadtime'] = row['pointWarningLeadtime']
     info['magnitude'] = -1 if row['magnitude'] == 'U' else float(row['magnitude'])
+    info['AzShear_max'] = row['AzShear_max']
+    info['AzShear_mean'] = row['AzShear_mean']
+    info['populationDensity_2pt5_min'] = row['populationDensity_2pt5_min']
 
     if row['spout']:
         label = 'spout'
@@ -314,7 +332,11 @@ ds.magnitude = pd.to_numeric(ds.magnitude)
 
 #ds = ds[(ds.tornado == 1) & (ds.magnitude >= 4)]
 
+# 2011-2018
 datapatt = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+# 2019-2024
+datapatt = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+
 outpatt = '/raid/jcintineo/torcnn/tfrecs2/%Y/%Y%m%d/'
 
 hs = halfsize = 96
