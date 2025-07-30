@@ -321,8 +321,13 @@ def collect_and_write_tfrec(row,
 
 # Drive the parallel processing
 
+dataset_type = 'Storm_Reports' # 'Storm_Reports' or 'pretornadic'
+
 # Load torp dataset
-dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/')
+dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/',
+                      years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
+                      dataset_type=dataset_type
+)
 ds = dataset.load_dataframe()
 
 # Make EFU = -1
@@ -337,7 +342,7 @@ datapatt = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50
 # 2019-2024
 datapatt = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
 
-outpatt = '/raid/jcintineo/torcnn/tfrecs2/%Y/%Y%m%d/'
+outpatt = f'/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
 
 hs = halfsize = 96
 
