@@ -180,8 +180,10 @@ def collect_and_write_tfrec(row,
                             hs,
                             varnames,
                             bsinfo,
-                            datapatt,
+                            datapatt1,
                             outpatt,
+                            datapatt2=None
+                            year_thresh=2019,
 ):
 
     """
@@ -191,9 +193,12 @@ def collect_and_write_tfrec(row,
         hs (int): halfsize of the patch
         varnames (list): List of strings for the variable names
         bsinfo (dict): contains min and max scaling values for each varname
-        datapatt (str): Full path data pattern. E.g., '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+        datapatt1 (str): Full path data pattern. E.g., '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
         outpatt (str): Pattern for root outdir. E.g., '/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
+        datapatt2 (str): Secondary data pattern. E.g., '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+        year_thresh (int): The threshold such that >= year_thresh will use datapatt2. Default is 2019.
     """
+
     if row['radar'] == '-99900':
         return
 
@@ -214,12 +219,12 @@ def collect_and_write_tfrec(row,
                                                                                     # Code finds start and end points within one minute and 1 km of one another
     try:
         info['obj_lat'] = row['latitudeExtractCenter']
-        info['obj_lon'] = row['longiudeExtractCenter']
+        info['obj_lon'] = row['longitudeExtractCenter']
         info['rangeExtractCenter'] = row['rangeExtractCenter']                      # Range from the radar for the storm object
         info['distToExtractCenter'] = row['distToExtractCenter']                    # distance to a report, in meters
     except KeyError:   # for pre-tornadic dataset
         info['obj_lat'] = row['latitudeAzShearMax']
-        info['obj_lon'] = row['longiudeAzShearMax']
+        info['obj_lon'] = row['longitudeAzShearMax']
         info['rangeExtractCenter'] = row['rangeAzShearMax']
         info['distToExtractCenter'] = row['distToAzShearMax']
     info['radar'] = row['radar']
@@ -229,8 +234,8 @@ def collect_and_write_tfrec(row,
     info['stormType'] = row['stormType']                                            
     info['minutesFromReport'] = row['minutesFromReport']                            # The minimum minutes from either the start or end time of a report swath.
     info['preTornadoTracked'] = row['preTornadoTracked']                            # was this stormID tracked pre-tornado?
-    info['overallWarningLeadtime'] = row['overallWarningLeadtime']
-    info['pointWarningLeadtime'] = row['pointWarningLeadtime']
+    info['overallWarningLeadTime'] = row['overallWarningLeadTime']
+    info['pointWarningLeadTime'] = row['pointWarningLeadTime']
     info['magnitude'] = -1 if row['magnitude'] == 'U' else float(row['magnitude'])
     info['AzShear_max'] = row['AzShear_max']
     info['AzShear_mean'] = row['AzShear_mean']
@@ -247,6 +252,15 @@ def collect_and_write_tfrec(row,
     raddt = datetime.strptime(row['radarTimestamp'], '%Y%m%d-%H%M%S')
 
     for ii, varname in enumerate(varnames):
+        # Check datapatt2 if defined
+        if datapatt2:
+            if row['year'] >= year_thresh:
+                datapatt = datapatt2 
+            else:
+                datapatt = datapatt1
+        else:
+            datapatt = datapatt1
+
         dpat = datapatt.replace('{radar}', row['radar']).replace('{varname}', varname)
         all_files = glob.glob(raddt.strftime(f"{os.path.dirname(dpat)}/*netcdf"))
         dts = [datetime.strptime(os.path.basename(ff), '%Y%m%d-%H%M%S.netcdf') for ff in all_files]
@@ -275,12 +289,12 @@ def collect_and_write_tfrec(row,
             info['az_idx'] = az_idx
             info['gate_idx'] = gate_idx
             # Store range on first iter
-            info['range'] = utils.bytescale(r_sector,
-                                            bsinfo['range']['vmin'],
-                                            bsinfo['range']['vmax'],
-                                            min_byte_val=2,
-                                            max_byte_val=255
-            )
+            #info['range'] = utils.bytescale(r_sector,
+            #                                bsinfo['range']['vmin'],
+            #                                bsinfo['range']['vmax'],
+            #                                min_byte_val=2,
+            #                                max_byte_val=255
+            #)
 
         # Make bad data masks
         missing_data_value = radds.attrs.get('MissingData', -99900.0)
@@ -338,9 +352,9 @@ ds.magnitude = pd.to_numeric(ds.magnitude)
 #ds = ds[(ds.tornado == 1) & (ds.magnitude >= 4)]
 
 # 2011-2018
-datapatt = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+datapatt1 = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
 # 2019-2024
-datapatt = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+datapatt2 = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
 
 outpatt = f'/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
 
@@ -370,8 +384,10 @@ collect_and_write_tfrec_args = dict(
     hs=halfsize,
     varnames=varnames,
     bsinfo=bsinfo,
-    datapatt=datapatt,
+    datapatt1=datapatt1,
     outpatt=outpatt,
+    datapatt2=datapatt2,
+    year_thresh=2019,
 )
 partial_collect_and_write_tfrec = functools.partial(collect_and_write_tfrec, **collect_and_write_tfrec_args)
 
