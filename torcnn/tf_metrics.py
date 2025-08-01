@@ -1,139 +1,234 @@
 import tensorflow as tf
 import tensorflow.keras.backend as K
 
-# We also have CSI in losses, but I think we need it defined as such to use
-# it as a sample-weighted (or masked) metric
-def csi(
-    use_soft_discretization,
-    hard_discretization_threshold=None,
-    name="csi",
-    index=0,
-):
-    def csi(target_tensor, prediction_tensor, sample_weight=None):
+#------------------------------------------------------------------------------------------------
 
-        # here we only care about 'index'.
-        target_tensor = target_tensor[..., index]
-        prediction_tensor = prediction_tensor[..., index]
+class csi(tf.keras.metrics.Metric):
+    """
+    A custom Keras Metric to calculate the Critical Success Index (CSI)
+    for a specific channel of multi-channel predictions.
+    """
+    def __init__(self,
+                 use_soft_discretization=False,
+                 hard_discretization_threshold=None,
+                 index=0,
+                 name='csi',
+                 **kwargs):
+        super().__init__(name=name, **kwargs)
+        
+        self.use_soft_discretization = use_soft_discretization
+        self.hard_discretization_threshold = hard_discretization_threshold
+        self.index = index
+        
+        # State variables to accumulate true positives, false positives, and false negatives
+        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float32)
+        self.false_positives = self.add_weight(name='false_positives', initializer='zeros', dtype=tf.float32)
+        self.false_negatives = self.add_weight(name='false_negatives', initializer='zeros', dtype=tf.float32)
 
-        if hard_discretization_threshold is not None:
-            prediction_tensor = tf.where(
-                prediction_tensor >= hard_discretization_threshold, 1.0, 0.0
-            )
-        elif use_soft_discretization:
-            prediction_tensor = K.sigmoid(prediction_tensor)
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Determine the rank of the tensors.
+        rank = tf.rank(y_pred).ndim
 
-        target_tensor = tf.cast(target_tensor, tf.float32)
+        if rank > 1:
+            y_true = y_true[..., self.index]
+            y_pred = y_pred[..., self.index]
 
-        true_positives = target_tensor * prediction_tensor
-        false_positives = (1 - target_tensor) * prediction_tensor
-        false_negatives = target_tensor * (1 - prediction_tensor)
+            channel_sample_weight = None
+            if sample_weight is not None:
+                channel_sample_weight = sample_weight[..., self.index]
+                # Ensure channel_sample_weight is float32 for multiplication
+                channel_sample_weight = tf.cast(channel_sample_weight, dtype=tf.float32)
+        else:
+            channel_sample_weight = sample_weight
 
-        # Apply sample weights to each term
+        y_true = tf.cast(y_true, dtype=tf.float32)
+        y_pred = tf.cast(y_pred, dtype=tf.float32)
+
+        # Apply discretization
+        if self.hard_discretization_threshold is not None:
+            y_pred = tf.cast(y_pred >= self.hard_discretization_threshold, tf.float32)
+        elif self.use_soft_discretization:
+            y_pred = tf.sigmoid(y_pred)
+
+
+        # Calculate true positives and false positives for the current batch
+        true_positives_batch = y_true * y_pred
+        false_positives_batch = (1 - y_true) * y_pred
+        false_negatives_batch = y_true * (1 - y_pred)
+
+        # Apply sample weights consistently, regardless of rank
         if sample_weight is not None:
-            channel_sample_weight = sample_weight[..., index]
-            true_positives = true_positives * channel_sample_weight
-            false_positives = false_positives * channel_sample_weight
-            false_negatives = false_negatives * channel_sample_weight
+            true_positives_batch = true_positives_batch * channel_sample_weight
+            false_positives_batch = false_positives_batch * channel_sample_weight
+            false_negatives_batch = false_negatives_batch * channel_sample_weight
 
-        # Sum across all dimensions to get the total counts
-        num_true_positives = K.sum(true_positives)
-        num_false_positives = K.sum(false_positives)
-        num_false_negatives = K.sum(false_negatives)
+        # Update the state variables by summing the batch values
+        self.true_positives.assign_add(tf.reduce_sum(true_positives_batch))
+        self.false_positives.assign_add(tf.reduce_sum(false_positives_batch))
+        self.false_negatives.assign_add(tf.reduce_sum(false_negatives_batch))
 
-        denominator = (
-            num_true_positives + num_false_positives + num_false_negatives + K.epsilon()
-        )
-        csi_value = num_true_positives / denominator
-
+    def result(self):
+        # Compute the final CSI value from the aggregated state
+        denominator = self.true_positives + self.false_positives + self.false_negatives
+        # Use tf.math.divide_no_nan to prevent division by zero
+        csi_value = tf.math.divide_no_nan(self.true_positives, denominator)
         return csi_value
 
-    csi.__name__ = name
-
-    return csi
+    def reset_state(self):
+        # Reset the state variables at the start of each new epoch
+        self.true_positives.assign(0.0)
+        self.false_positives.assign(0.0)
+        self.false_negatives.assign(0.0)
 
 #------------------------------------------------------------------------------------------------
 
-def pod(use_soft_discretization,
-        hard_discretization_threshold=None,
-        name='pod',
-        index=0,
-):
-    def pod(target_tensor, prediction_tensor, sample_weight=None):
+class pod(tf.keras.metrics.Metric):
+    """
+    A custom Keras Metric to calculate the Probability of Detection (POD)
+    for a specific channel of multi-channel predictions.
+    """
+    def __init__(self,
+                 use_soft_discretization=False,
+                 hard_discretization_threshold=None,
+                 index=0,
+                 name='pod',
+                 **kwargs):
+        super().__init__(name=name, **kwargs)
+        
+        self.use_soft_discretization = use_soft_discretization
+        self.hard_discretization_threshold = hard_discretization_threshold
+        self.index = index
+        
+        # State variables to accumulate true positives and false negatives
+        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float32)
+        self.false_negatives = self.add_weight(name='false_negatives', initializer='zeros', dtype=tf.float32)
 
-        # here we only care about 'index'.
-        target_tensor = target_tensor[..., index]
-        prediction_tensor = prediction_tensor[..., index]
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Determine the rank of the tensors.
+        rank = tf.rank(y_pred).ndim
 
-        if hard_discretization_threshold is not None:
-            prediction_tensor = tf.where(prediction_tensor >= hard_discretization_threshold, 1., 0.)
-        elif use_soft_discretization:
-            prediction_tensor = K.sigmoid(prediction_tensor)
+        if rank > 1:
+            y_true = y_true[..., self.index]
+            y_pred = y_pred[..., self.index]
 
-        target_tensor = tf.cast(target_tensor, tf.float32)
+            channel_sample_weight = None
+            if sample_weight is not None:
+                channel_sample_weight = sample_weight[..., self.index]
+                # Ensure channel_sample_weight is float32 for multiplication
+                channel_sample_weight = tf.cast(channel_sample_weight, dtype=tf.float32)
+        else:
+            channel_sample_weight = sample_weight
 
-        true_positives = target_tensor * prediction_tensor
-        false_negatives = target_tensor * (1 - prediction_tensor)
+        y_true = tf.cast(y_true, dtype=tf.float32)
+        y_pred = tf.cast(y_pred, dtype=tf.float32)
 
-        # Apply sample weights to each term
+        # Apply discretization
+        if self.hard_discretization_threshold is not None:
+            y_pred = tf.cast(y_pred >= self.hard_discretization_threshold, tf.float32)
+        elif self.use_soft_discretization:
+            y_pred = tf.sigmoid(y_pred)
+
+
+        # Calculate true positives and false positives for the current batch
+        true_positives_batch = y_true * y_pred
+        false_negatives_batch = (y_true) * (1 - y_pred)
+
+        # Apply sample weights consistently, regardless of rank
         if sample_weight is not None:
-            channel_sample_weight = sample_weight[..., index]
-            true_positives = true_positives * channel_sample_weight
-            false_negatives = false_negatives * channel_sample_weight
+            true_positives_batch = true_positives_batch * channel_sample_weight
+            false_negatives_batch = false_negatives_batch * channel_sample_weight
 
-        # Sum across all dimensions to get the total counts
-        num_true_positives = K.sum(true_positives)
-        num_false_negatives = K.sum(false_negatives)
+        # Update the state variables by summing the batch values
+        self.true_positives.assign_add(tf.reduce_sum(true_positives_batch))
+        self.false_negatives.assign_add(tf.reduce_sum(false_negatives_batch))
 
-        denominator = (num_true_positives + num_false_negatives + K.epsilon())
-        pod_value = num_true_positives / denominator
-
+    def result(self):
+        # Compute the final FAR value from the aggregated state
+        denominator = self.true_positives + self.false_negatives
+        # Use tf.math.divide_no_nan to prevent division by zero
+        pod_value = tf.math.divide_no_nan(self.true_positives, denominator)
         return pod_value
 
-    pod.__name__ = name
+    def reset_state(self):
+        # Reset the state variables at the start of each new epoch
+        self.true_positives.assign(0.0)
+        self.false_negatives.assign(0.0)
 
-    return pod
 
 #------------------------------------------------------------------------------------------------
 
-def far(use_soft_discretization,
-        hard_discretization_threshold=None,
-        name='far',
-        index=0,
-):
-    def far(target_tensor, prediction_tensor, sample_weight=None):
+class far(tf.keras.metrics.Metric):
+    """
+    A custom Keras Metric to calculate the False Alarm Rate (FAR)
+    for a specific channel of multi-channel predictions.
+    """
+    def __init__(self,
+                 use_soft_discretization=False,
+                 hard_discretization_threshold=None,
+                 index=0,
+                 name='far',
+                 **kwargs):
+        super().__init__(name=name, **kwargs)
+        
+        self.use_soft_discretization = use_soft_discretization
+        self.hard_discretization_threshold = hard_discretization_threshold
+        self.index = index
+        
+        # State variables to accumulate true positives and false positives
+        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float32)
+        self.false_positives = self.add_weight(name='false_positives', initializer='zeros', dtype=tf.float32)
 
-        # here we only care about 'index'.
-        target_tensor = target_tensor[..., index]
-        prediction_tensor = prediction_tensor[..., index]
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Determine the rank of the tensors.
+        rank = tf.rank(y_pred).ndim
 
-        if hard_discretization_threshold is not None:
-            prediction_tensor = tf.where(prediction_tensor >= hard_discretization_threshold, 1., 0.)
-        elif use_soft_discretization:
-            prediction_tensor = K.sigmoid(prediction_tensor)
+        if rank > 1:
+            y_true = y_true[..., self.index]
+            y_pred = y_pred[..., self.index]
 
-        target_tensor = tf.cast(target_tensor, tf.float32)
+            channel_sample_weight = None
+            if sample_weight is not None:
+                channel_sample_weight = sample_weight[..., self.index]
+                # Ensure channel_sample_weight is float32 for multiplication
+                channel_sample_weight = tf.cast(channel_sample_weight, dtype=tf.float32)
+        else:
+            channel_sample_weight = sample_weight
 
-        true_positives = target_tensor * prediction_tensor
-        false_positives = (1 - target_tensor) * prediction_tensor
+        y_true = tf.cast(y_true, dtype=tf.float32)
+        y_pred = tf.cast(y_pred, dtype=tf.float32)
 
-        # Apply sample weights to each term
+        # Apply discretization
+        if self.hard_discretization_threshold is not None:
+            y_pred = tf.cast(y_pred >= self.hard_discretization_threshold, tf.float32)
+        elif self.use_soft_discretization:
+            y_pred = tf.sigmoid(y_pred)
+
+
+        # Calculate true positives and false positives for the current batch
+        true_positives_batch = y_true * y_pred
+        false_positives_batch = (1 - y_true) * y_pred
+
+        # Apply sample weights consistently, regardless of rank
         if sample_weight is not None:
-            channel_sample_weight = sample_weight[..., index]
-            true_positives = true_positives * channel_sample_weight
-            false_positives = false_positives * channel_sample_weight
+            true_positives_batch = true_positives_batch * channel_sample_weight
+            false_positives_batch = false_positives_batch * channel_sample_weight
 
-        # Sum across all dimensions to get the total counts
-        num_true_positives = K.sum(true_positives)
-        num_false_positives = K.sum(false_positives)
+        # Update the state variables by summing the batch values
+        self.true_positives.assign_add(tf.reduce_sum(true_positives_batch))
+        self.false_positives.assign_add(tf.reduce_sum(false_positives_batch))
 
-        denominator = (num_true_positives + num_false_positives + K.epsilon())
-        far_value = num_false_positives / denominator
-
+    def result(self):
+        # Compute the final FAR value from the aggregated state
+        denominator = self.true_positives + self.false_positives
+        # Use tf.math.divide_no_nan to prevent division by zero
+        far_value = tf.math.divide_no_nan(self.false_positives, denominator)
         return far_value
 
-    far.__name__ = name
+    def reset_state(self):
+        # Reset the state variables at the start of each new epoch
+        self.true_positives.assign(0.0)
+        self.false_positives.assign(0.0)
 
-    return far
 
 #------------------------------------------------------------------------------------------------
 
@@ -144,15 +239,26 @@ class AUC(tf.keras.metrics.Metric):
         self.auc_metric = tf.keras.metrics.AUC(name=f'_auc_internal_channel{self.index}', curve=curve)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
-        # Select the channel from y_true and y_pred
-        y_true_channel = y_true[..., self.index]
-        y_pred_channel = y_pred[..., self.index]
+        # Determine the rank of the tensors.
+        rank = tf.rank(y_pred).ndim
 
-        channel_sample_weight = None
-        if sample_weight is not None:
-            channel_sample_weight = sample_weight[..., self.index]
+        if rank > 1:
+            y_true = y_true[..., self.index]
+            y_pred = y_pred[..., self.index]
+            
+            channel_sample_weight = None
+            if sample_weight is not None:
+                channel_sample_weight = sample_weight[..., self.index]
+                # Ensure channel_sample_weight is float32 for multiplication
+                channel_sample_weight = tf.cast(channel_sample_weight, dtype=tf.float32)
+        else: 
+            channel_sample_weight = sample_weight
 
-        self.auc_metric.update_state(y_true_channel, y_pred_channel, channel_sample_weight)
+        y_true = tf.cast(y_true, dtype=tf.float32)
+        y_pred = tf.cast(y_pred, dtype=tf.float32)
+
+        # Pass the correctly shaped tensors to the internal AUC metric.
+        self.auc_metric.update_state(y_true, y_pred, sample_weight=channel_sample_weight)
 
     def result(self):
         return self.auc_metric.result()
@@ -165,26 +271,33 @@ class BrierScore(tf.keras.metrics.Metric):
     def __init__(self, name='brier_score', index=0, **kwargs):
         super().__init__(name=name, **kwargs)
         self.index = index
-        self.bs_metric = tf.keras.metrics.MeanSquaredError(name=f'_brier_score_internal_channel{self.index}')
         # Use Mean for weighted average of the squared errors
         self.total_squared_error = self.add_weight(name='total_squared_error', initializer='zeros', dtype=tf.float32)
         self.total_weight = self.add_weight(name='total_weight', initializer='zeros', dtype=tf.float32)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
-        # Select the channel from y_true and y_pred
-        y_true_channel = tf.cast(y_true[..., self.index], dtype=tf.float32) # Shape: (batch_size, H, W)
-        y_pred_channel = tf.cast(y_pred[..., self.index], dtype=tf.float32) # Shape: (batch_size, H, W)
+        # Determine the rank of the tensors.
+        rank = tf.rank(y_pred).ndim
+
+        if rank > 1:
+            y_true = y_true[..., self.index]
+            y_pred = y_pred[..., self.index]
+
+            channel_sample_weight = None
+            if sample_weight is not None:
+                channel_sample_weight = sample_weight[..., self.index]
+                # Ensure channel_sample_weight is float32 for multiplication
+                channel_sample_weight = tf.cast(channel_sample_weight, dtype=tf.float32)
+        else:
+            channel_sample_weight = sample_weight
+
+        y_true = tf.cast(y_true, dtype=tf.float32)
+        y_pred = tf.cast(y_pred, dtype=tf.float32)
 
         # Calculate squared errors for this channel
-        squared_errors = tf.math.square(y_true_channel - y_pred_channel) # Shape: (batch_size, H, W)
+        squared_errors = tf.math.square(y_true - y_pred) # Shape: (batch_size, H, W)
 
-        channel_sample_weight = None
         if sample_weight is not None:
-            channel_sample_weight = sample_weight[..., self.index] # Shape: (batch_size, H, W)
-
-            # Ensure channel_sample_weight is float32 for multiplication
-            channel_sample_weight = tf.cast(channel_sample_weight, dtype=tf.float32)
-
             # Apply the sample weight directly to the squared errors
             weighted_squared_errors = tf.multiply(squared_errors, channel_sample_weight)
 
@@ -195,15 +308,15 @@ class BrierScore(tf.keras.metrics.Metric):
             weighted_squared_errors = squared_errors
             current_batch_total_weight = tf.cast(tf.size(squared_errors), dtype=tf.float32) # Count total elements
 
+
         # Update the state variables
         self.total_squared_error.assign_add(tf.reduce_sum(weighted_squared_errors))
         self.total_weight.assign_add(current_batch_total_weight)
 
     def result(self):
-        # Prevent division by zero
-        if self.total_weight == 0:
-            return 0.0
-        return self.total_squared_error / self.total_weight
+        # Use tf.math.divide_no_nan to perform division and handle the zero case
+        # This is the TensorFlow-native way to handle the logic from your `if` statement
+        return tf.math.divide_no_nan(self.total_squared_error, self.total_weight)
 
     def reset_state(self):
         self.total_squared_error.assign(0.0)

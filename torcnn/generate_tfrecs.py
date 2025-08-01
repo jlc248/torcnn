@@ -182,7 +182,7 @@ def collect_and_write_tfrec(row,
                             bsinfo,
                             datapatt1,
                             outpatt,
-                            datapatt2=None
+                            datapatt2=None,
                             year_thresh=2019,
 ):
 
@@ -284,6 +284,14 @@ def collect_and_write_tfrec(row,
                                                                                 hs=hs,
                                                                                 varname=varname
         )
+
+        # Assert that the shape is correct
+        try:
+            assert(rad_sector.shape == (hs*2, hs*2))
+        except AssertionError as err:
+            print(f"{row['radar']}, {row['radarTimestamp']}, {varname}.shape == {rad_sector.shape}")
+            return
+
         if ii == 0:
             # Store indexes
             info['az_idx'] = az_idx
@@ -356,7 +364,7 @@ datapatt1 = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.5
 # 2019-2024
 datapatt2 = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
 
-outpatt = f'/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
+outpatt = f'/raid/jcintineo/torcnn/tfrecs2/%Y/%Y%m%d/'
 
 hs = halfsize = 96
 

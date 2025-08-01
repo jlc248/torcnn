@@ -16,22 +16,23 @@ def tf_config():
     # For conventional CNNs
   
     if cnn == 'cnn':
-        ngpu = 2
+        ngpu = 1
         batchsize = max([ngpu,1]) * 256
-        target = 'tornado'
+        targets = ['tornado']
   
-        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs/"
-        train_list = [f"{tfrec_dir}/201[1-7]/2*/*/*tfrec"]
-        val_list = [f"{tfrec_dir}/2018/2*/*/*.tfrec"]
+        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs"
+        # N.B. Can't have any "//" in the train_list or val_list!
+        train_list = [f"{tfrec_dir}/201[1-9]/2*/*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/*/*tfrec"]
+        val_list = [f"{tfrec_dir}/2023/2*/*/*.tfrec"]
 
-        outprefix = '/raid/jcintineo/torcnn/tests/2011-18/'
+        outprefix = '/raid/jcintineo/torcnn/tests/2011-23/'
         outdir = f'{outprefix}/test01'
   
         # Inputs
         inputs.append(['Reflectivity','Velocity','SpectrumWidth','AzShear','DivShear','RhoHV','PhiDP','Zdr'])
-        scalar_vars = ['rangeKm']
+        scalar_vars = ['rangeExtractCenter']
   
-        ps = (96,96)
+        ps = (192,192)
         input_tuples = [(ps[0], ps[0], len(inputs[0]))]
       
   
@@ -43,18 +44,18 @@ def tf_config():
         img_aug = {} #{'random_noise':0.1}
   
         #architecture
-        num_conv_filters = 64
+        num_conv_filters = 32
         bias_init = None #np.array([-2.52378297]) #this np.log([pos/neg]) ; see https://www.tensorflow.org/tutorials/structured_data/imbalanced_data
         dropout_rate = 0.3
   
-        num_encoding_blocks = 4
+        num_encoding_blocks = 5
         num_conv_per_block = 2
-        nfmaps_by_block = [num_conv_filters, int(num_conv_filters*2), int(num_conv_filters*3),
-                           int(num_conv_filters*4)]
+        nfmaps_by_block = [num_conv_filters, int(num_conv_filters*2), int(num_conv_filters*4),
+                           int(num_conv_filters*5), int(num_conv_filters*6)]
         assert(len(nfmaps_by_block) == num_encoding_blocks)
         num_decoding_blocks = 0
   
-        dense_layers = [128,16] # Number of nuerons per dense layer
+        dense_layers = [128, 16] # Number of nuerons per dense layer
   
   
   
@@ -63,11 +64,12 @@ def tf_config():
       channels += inp
   
     if scalar_vars:
-        for sv in scalar_vars:
-            std_scaling_vals[ch] = std_scaling_vals[ch]
+        #for sv in scalar_vars:
+        #    std_scaling_vals[ch] = std_scaling_vals[ch]
         input_tuples.append((len(scalar_vars),))
   
     return {
+           'ps':ps,
            'img_aug':img_aug,
            'sample_weights':sample_weights,
            'class_weights':class_weights,
@@ -97,13 +99,13 @@ def tf_config():
            'inputs':inputs,
            'train_list':train_list,
            'val_list':val_list,
-           'target':target,
-           'std_scaling_vals':std_scaling_vals,
+           'targets':targets,
+           #'std_scaling_vals':std_scaling_vals,
            'byte_scaling_vals':byte_scaling_vals,
            'binarize':binarize,
            'ngpu':ngpu,
            'loss_fcn':loss_fcn,
-           'optimizer':'adabelief', #Adam, SGD, adabelief
+           'optimizer':'AdamW', # AdamW, Adam, SGD, adabelief
            'outdir':outdir,
            'pool':'max'
            }

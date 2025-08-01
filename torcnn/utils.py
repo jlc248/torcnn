@@ -90,19 +90,19 @@ def get_bsinfo():
     bsinfo = {}
 
     # L2 NEXRAD
-    bsinfo['Reflectivity'] = {'vmin':5, 'vmax':70}        # dBZ
-    bsinfo['Velocity'] = {'vmin':-100, 'vmax':100}        # m/s
-    bsinfo['AliasedVelocity'] = {'vmin':-100, 'vmax':100} # m/s
-    bsinfo['AzShear'] = {'vmin':-0.01, 'vmax':0.04}       # /s
-    bsinfo['DivShear'] = {'vmin':-0.01, 'vmax':0.04}      # /s
-    bsinfo['PhiDP'] = {'vmin':0, 'vmax':360}              # degrees
-    bsinfo['RhoHV'] = {'vmin':0, 'vmax':1}                # dimless
-    bsinfo['SpectrumWidth'] = {'vmin':0, 'vmax':70}       # m/s
-    bsinfo['Zdr'] = {'vmin':-4, 'vmax':6}                 # dB
+    bsinfo['Reflectivity'] = {'vmin':5, 'vmax':70}          # dBZ
+    bsinfo['Velocity'] = {'vmin':-100, 'vmax':100}          # m/s
+    bsinfo['AliasedVelocity'] = {'vmin':-100, 'vmax':100}   # m/s
+    bsinfo['AzShear'] = {'vmin':-0.01, 'vmax':0.04}         # /s
+    bsinfo['DivShear'] = {'vmin':-0.01, 'vmax':0.04}        # /s
+    bsinfo['PhiDP'] = {'vmin':0, 'vmax':360}                # degrees
+    bsinfo['RhoHV'] = {'vmin':0, 'vmax':1}                  # dimless
+    bsinfo['SpectrumWidth'] = {'vmin':0, 'vmax':70}         # m/s
+    bsinfo['Zdr'] = {'vmin':-4, 'vmax':6}                   # dB
 
     # Other vars
-    bsinfo['azimuth'] = {'vmin':0, 'vmax':360}            # degrees
-    bsinfo['rangeKm'] = {'vmin':0, 'vmax': 460}           # km 
+    bsinfo['azimuth'] = {'vmin':0, 'vmax':360}              # degrees
+    bsinfo['rangeExtractCenter'] = {'vmin':0, 'vmax': 460}  # km 
 
     return bsinfo
 

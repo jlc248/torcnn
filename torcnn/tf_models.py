@@ -46,7 +46,7 @@ def get_metrics(num_targets=1):
 
   return metrics
 #---------------------------------------------------------------------------------------------------------------------------------
-def convnet(config):
+def cnn(config):
 
     input_tuples = config['input_tuples']
     filter_width = config['filter_width']
@@ -54,7 +54,6 @@ def convnet(config):
     learning_rate = config['learning_rate']
     batch_norm = config['batch_norm']
     dor = config['dropout_rate']
-    dilation = config['dilation']
     scalar_vars = config['scalar_vars']
     padding = config['padding']
     num_encoding_blocks = config['num_encoding_blocks']
@@ -69,8 +68,8 @@ def convnet(config):
         nfmaps = nfmaps_by_block[ii]
 
         for jj in range(num_conv_per_block):
-            first_block_input = input_1 if(ii == 0 and jj == 0) else conv
-            conv = layers.Conv2D(nfmaps, filter_width, padding=padding, dilation_rate=dilation)(first_block_input)
+            first_block_input = input_0 if(ii == 0 and jj == 0) else conv
+            conv = layers.Conv2D(nfmaps, filter_width, padding=padding, )(first_block_input)
             if batch_norm:
                 conv = layers.BatchNormalization()(conv)
             if conv_activation == 'leaky_relu':
