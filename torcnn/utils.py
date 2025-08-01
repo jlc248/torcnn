@@ -161,17 +161,28 @@ def training_history_figs(history, outdir=None):
                         far = history[f'far{key[3:5]}_index{idx}'][ii]
                         pod = history[f'pod{key[3:5]}_index{idx}'][ii]
                         prob = round(int(key[3:5])/100, 2)
-            best_csi_by_epoch.append(best)
-            best_prob_by_epoch.append(prob)
-            far_by_epoch.append(far)
-            pod_by_epoch.append(pod)
+            try:
+                best_csi_by_epoch.append(best)
+                best_prob_by_epoch.append(prob)
+            except NameError:
+                pass
+            try: far_by_epoch.append(far)
+            except NameError: pass
+            try: pod_by_epoch.append(pod)
+            except NameError: pass
 
-        t1, = plt.plot(xvals, pod_by_epoch, color='blue', linestyle='--', label='POD')
-        t2, = plt.plot(xvals, far_by_epoch, color='blue', linestyle=':', label='FAR')
-        t3, = plt.plot(xvals, best_csi_by_epoch, color='blue', linestyle='-', label='CSI')
-        t4, = plt.plot(xvals, history[f'auprc_index{idx}'], color='blue', linestyle='-', linewidth=3, label='AUPRC')
-        t5, = plt.plot(xvals, history[f'brier_score_index{idx}'], color='blue', linestyle='-.', label='Brier Score')
-        t6, = plt.plot(xvals, best_prob_by_epoch, color='cyan', linestyle='-', label='best prob.')
+        if pod_by_epoch: t1, = plt.plot(xvals, pod_by_epoch, color='blue', linestyle='--', label='POD')
+        if far_by_epoch: t2, = plt.plot(xvals, far_by_epoch, color='blue', linestyle=':', label='FAR')
+        if best_csi_by_epoch: t3, = plt.plot(xvals, best_csi_by_epoch, color='blue', linestyle='-', label='CSI')
+        try:
+            t4, = plt.plot(xvals, history[f'auprc_index{idx}'], color='blue', linestyle='-', linewidth=3, label='AUPRC')
+        except KeyError:
+            pass
+        try:
+            t5, = plt.plot(xvals, history[f'brier_score_index{idx}'], color='blue', linestyle='-.', label='Brier Score')
+        except KeyError:
+            pass
+        if best_prob_by_epoch: t6, = plt.plot(xvals, best_prob_by_epoch, color='cyan', linestyle='-', label='best prob.')
         plt.title(f'Training scores index{idx}')
         plt.ylabel('Score')
         plt.xlabel('Epoch')
@@ -194,17 +205,28 @@ def training_history_figs(history, outdir=None):
                         far = history[f'val_far{key[7:9]}_index{idx}'][ii]
                         pod = history[f'val_pod{key[7:9]}_index{idx}'][ii]
                         prob = round(int(key[7:9])/100, 2)
-            best_csi_by_epoch.append(best)
-            best_prob_by_epoch.append(prob)
-            far_by_epoch.append(far)
-            pod_by_epoch.append(pod)
+            try:
+                best_csi_by_epoch.append(best)
+                best_prob_by_epoch.append(prob)
+            except NameError:
+                pass
+            try: far_by_epoch.append(far)
+            except NameError: pass
+            try: pod_by_epoch.append(pod)
+            except NameError: pass
 
-        t1, = plt.plot(xvals, pod_by_epoch, color='red', linestyle='--', label='POD')
-        t2, = plt.plot(xvals, far_by_epoch, color='red', linestyle=':', label='FAR')
-        t3, = plt.plot(xvals, best_csi_by_epoch, color='red', linestyle='-', label='CSI')
-        t4, = plt.plot(xvals, history[f'val_auprc_index{idx}'], color='red', linestyle='-', linewidth=3, label='AUPRC')
-        t5, = plt.plot(xvals, history[f'val_brier_score_index{idx}'], color='red', linestyle='-.', label='Brier Score')
-        t6, = plt.plot(xvals, best_prob_by_epoch, color='orange', linestyle='-', label='best prob.')
+        if pod_by_epoch: t1, = plt.plot(xvals, pod_by_epoch, color='red', linestyle='--', label='POD')
+        if far_by_epoch: t2, = plt.plot(xvals, far_by_epoch, color='red', linestyle=':', label='FAR')
+        if best_csi_by_epoch: t3, = plt.plot(xvals, best_csi_by_epoch, color='red', linestyle='-', label='CSI')
+        try:
+            t4, = plt.plot(xvals, history[f'val_auprc_index{idx}'], color='red', linestyle='-', linewidth=3, label='AUPRC')
+        except KeyError:
+            pass
+        try:
+            t5, = plt.plot(xvals, history[f'val_brier_score_index{idx}'], color='red', linestyle='-.', label='Brier Score')
+        except KeyError:
+            pass
+        if best_prob_by_epoch: t6, = plt.plot(xvals, best_prob_by_epoch, color='orange', linestyle='-', label='best prob.')
         plt.title(f'Validation scores index{idx}')
         plt.ylabel('Score')
         plt.xlabel('Epoch')
