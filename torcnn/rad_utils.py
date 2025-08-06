@@ -109,9 +109,11 @@ def plot_ppi(file_path,
     - rangemax (int): the maximum range to plot, in km from radar
     - Xlat (float or None): An optional latitude to plot
     - Xlon (float or None): An optional longitude to plot
-    - window_size (int): +/- points from Xlat/Xlon in polar coordinates for segment plot 
+    - window_size tuple (int, int): +/- points from Xlat/Xlon in polar coordinates for segment plot 
     - plot_segment (bool): Plot only the segment defined by Xlat, Xlon, and window_size
     """
+
+    n_az, n_gate = window_size
 
     if isinstance(varname, str):
         varnames = [varname]
@@ -258,13 +260,13 @@ def plot_ppi(file_path,
             if plot_segment:
                 # Azimuth slicing (clamped, non-wrapping)
                 num_azimuths = len(theta)
-                start_az_slice = azimuth_idx - window_size #max(0, azimuth_idx - window_size)
-                end_az_slice = azimuth_idx + window_size + 1 #min(num_azimuths, azimuth_idx + window_size + 1) # +1 for exclusive end 
+                start_az_slice = azimuth_idx - n_az 
+                end_az_slice = azimuth_idx + n_az + 1 
                     
                 # Gate slicing (clamped)
                 num_gates_limited = len(r_km_limited)
-                start_gate_slice = max(0, gate_idx - window_size)
-                end_gate_slice = min(num_gates_limited, gate_idx + window_size + 1) # +1 for exclusive end
+                start_gate_slice = max(0, gate_idx - n_gate)
+                end_gate_slice = min(num_gates_limited, gate_idx + n_gate + 1) # +1 for exclusive end
 
                 if end_az_slice > num_azimuths:
                     # Indicates that we're wrapping around 0 degrees
@@ -649,8 +651,8 @@ if __name__ == "__main__":
 
     # North of radar example
     #file_path = '/data/thea.sandmael/data/radar/20120220/KVNX/netcdf/Velocity/00.50/20120220-211430.netcdf'
-    file_path = '/data/thea.sandmael/data/radar/20120220/KVNX/netcdf/Reflectivity/00.50/20120220-211412.netcdf'
-    target_lat, target_lon = 37.29, -98.03
+    #file_path = '/data/thea.sandmael/data/radar/20120220/KVNX/netcdf/Reflectivity/00.50/20120220-211412.netcdf'
+    #target_lat, target_lon = 37.29, -98.03
     
     # 127 km away example
     #file_path = '/data/thea.sandmael/data/radar/20140618/KFSD/netcdf/Velocity/00.50/20140618-030239.netcdf'
@@ -669,17 +671,17 @@ if __name__ == "__main__":
     #target_lat, target_lon = 41.3, -94.51
 
     # 9-10 km away example
-    #file_path = '/data/thea.sandmael/data/radar/20160524/KDDC/netcdf/Velocity/00.50/20160524-235541.netcdf'
-    #target_lat, target_lon = 37.7922, -100.0695
+    file_path = '/data/thea.sandmael/data/radar/20160524/KDDC/netcdf/Velocity/00.50/20160524-235541.netcdf'
+    target_lat, target_lon = 37.77, -99.99 #37.7922, -100.0695
 
     # EF4 example (KFWS)
-    file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
-    target_lat, target_lon = 32.51, -95.91
+    #file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
+    #target_lat, target_lon = 32.51, -95.91
 
-    window_size = 96
+    window_size = 64, 128 #120//2, 240//2 # n_az, n_gate # these are half-sizes
 
     #varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    varname = ['Reflectivity', 'Velocity', 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
+    varname = ['Reflectivity', 'Velocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
 
     fig, radar = plot_ppi(file_path,
                           varname=varname,
