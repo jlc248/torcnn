@@ -18,7 +18,7 @@ def get_metrics(num_targets=1):
 
   metrics = []
 
-  levs = np.arange(0.05,0.96,0.05)
+  levs = np.arange(0.05,0.51,0.05)
   for ii in range(num_targets):
 
       metrics.append(tf_metrics.AUC(name=f'auprc_index{ii}', curve='PR', index=ii))
@@ -62,6 +62,7 @@ def cnn(config):
 
     input_0 = layers.Input(shape=input_tuples[0], name='input_0')
     inputs = [input_0]
+    input_0  = layers.Rescaling(1./255)(input_0)
 
     # encoding
     for ii in range(num_encoding_blocks):
@@ -78,20 +79,22 @@ def cnn(config):
                 layers.Activation(conv_activation)(conv)
             if jj == num_conv_per_block - 1: #if last conv in the block
                 conv = layers.MaxPooling2D(pool_size=(2, 2))(conv)
-              #  if(dor > 0): conv = Dropout(dor)(conv)
 
-    #Flatten
+    # Flatten
     conv = layers.Flatten()(conv)
 
     #concatenate scalars
     if scalar_vars:
         scalar_input = layers.Input(shape=input_tuples[-1], name='input_1')
         inputs.append(scalar_input)
+        scalar_input  = layers.Rescaling(1./255)(scalar_input)
         conv = layers.concatenate([conv,scalar_input])
 
-    #Dense layers
+    # Dense layers
     for ii,nneurons in enumerate(config['dense_layers']):
         conv = layers.Dense(nneurons)(conv)
+        if batch_norm:
+            conv = layers.BatchNormalization()(conv)
         if conv_activation == 'leaky_relu':
             conv = layers.LeakyReLU()(conv)
         else:

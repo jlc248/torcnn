@@ -224,7 +224,52 @@ def apply_noise(input_dict, target_img):
 
     return input_dict, target_img
 #################################################################################################################################
+from tensorflow.python.lib.io import tf_record
 
+def is_tfrecord_corrupted(file_path):
+    """
+    Checks a single TFRecord file for corruption.
+    Returns True if corrupted, False otherwise.
+    """
+    try:
+        for _ in tf_record.tf_record_iterator(file_path):
+            pass
+        return False  # No corruption found
+    except tf.errors.DataLossError as e:
+        print(f"ERROR: Corrupted record found in file: {file_path}")
+        print(f"Error details: {e}")
+        return True # Corruption detected
+    except Exception as e:
+        print(f"An unexpected error occurred for {file_path}: {e}")
+        return True # Treat other read errors as corruption as well
+################################################################################################################################
+def find_corrupted_tfrecords(all_files):
+    """
+    Scans a directory for corrupted TFRecord files.
+    """
+    corrupted_files = []
+    
+    print(f"Scanning {len(all_files)} TFRecord files for corruption...")
+    
+    # Iterate through each file and check for corruption
+    for i, file_path in enumerate(all_files, 1):
+        if i % 1000 == 0:
+            print(f"Checked {i}/{len(all_files)} files...")
+        
+        if is_tfrecord_corrupted(file_path):
+            print(f"Corrupted file found: {file_path}")
+            corrupted_files.append(file_path)
+
+    print("\n--- Scan Complete ---")
+    if corrupted_files:
+        print("Found the following corrupted files:")
+        for cf in corrupted_files:
+            print(cf)
+    else:
+        print("No corrupted TFRecord files were found.")
+
+
+#################################################################################################################################
 # Train: Create list of training datasets
 print('\nBuilding training Dataset')
 
@@ -241,11 +286,18 @@ train_filenames = []
 for pattern in config['train_list']:
     train_filenames.extend(glob.glob(pattern))
 
+# Uncomment to find corrupted tfrecords
+#find_corrupted_tfrecords(train_filenames)
+#sys.exit()
+
 n_tsamples = len(train_filenames)
 print('n_tsamples',n_tsamples)
+steps_per_epoch = n_tsamples // BATCHSIZE
+print('steps_per_epoch:', steps_per_epoch)
 
 train_ds = (tf.data.TFRecordDataset(train_filenames, num_parallel_reads=AUTOTUNE, buffer_size=BUFFER_SIZE)
            .shuffle(1024)
+           .repeat()
            .map(parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
            .map(prepare_sample, num_parallel_calls=AUTOTUNE)
            .batch(BATCHSIZE)
@@ -262,24 +314,23 @@ if 'random_rotation' in config['img_aug']:
 if 'random_noise' in config['img_aug']: #original and concatenated augmentations are noised
     train_ds = train_ds.map(apply_noise, num_parallel_calls=AUTOTUNE)
 
-# For quick_looks
+# For quick_looks or error-checking
 #for inputs,labels in train_ds:
 #    inp0 = inputs['input_0'].numpy()
 #    inp1 = inputs['input_1'].numpy()
 #    label = labels.numpy()
 #    print(inp0.shape, inp1.shape, label.shape)
-#    sys.exit()
+#    if inp0.shape != (512,192,192,8) or inp1.shape != (512,) or label.shape != (512,):
+#        print('here!')
+#        sys.exit()
 #    fig,ax = plt.subplots(nrows=1,ncols=3)
 #    for ii,axis in enumerate(ax.ravel()):
 #        axis.axis('off')
 #        if ii==0: axis.imshow(inp0[0,...,0])
 #        if ii==1: axis.imshow(inp0[0,...,1])
 #        if ii==2: axis.imshow(inp0[0,...,2])
-#        print('scalars', inp1)
-#        print('label', label)
 #    plt.show()
 #    sys.exit()
-
 
 print('\nBuilding validation Dataset')
 
@@ -325,7 +376,7 @@ pickle.dump(config,open(os.path.join(outdir,'model_config.pkl'),'wb'))
 
 csvlogger = CSVLogger(f"{outdir}/log.csv", append=True)
 early_stopping = EarlyStopping(monitor='val_loss', patience=config['es_patience'], min_delta=0.00005)
-mcp_save = ModelCheckpoint(os.path.join(outdir,'model-{epoch:02d}-{val_loss:03f}.h5'),save_best_only=True, monitor='val_loss', mode='min')
+mcp_save = ModelCheckpoint(os.path.join(outdir,'model-{epoch:02d}-{val_loss:03f}.keras'),save_best_only=True, monitor='val_loss', mode='min')
 reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', cooldown=config['rlr_cooldown'], verbose=1,# min_delta=0.00001,
                  factor=config['rlr_factor'], patience=config['rlr_patience'], mode='min')
 #tboard = TensorBoard(log_dir='/home/jcintineo/pscnn/pscnn/tb_logs/',
@@ -374,6 +425,7 @@ logging.info('Fitting model...')
 history = conv_model.fit(
           x=train_ds,
           verbose=1,
+          steps_per_epoch=steps_per_epoch,
           epochs=config['nepoch'],
           validation_data=val_ds,
           initial_epoch=initial_epoch,
@@ -382,11 +434,11 @@ history = conv_model.fit(
 
 logging.info('Saving model and training history...')
 #copy the model with the best val_loss
-best_model = np.sort(glob.glob(f"{outdir}/model-*.h5"))[-1]
-shutil.copy(best_model,f"{os.path.dirname(best_model)}/fit_conv_model.h5")
+best_model = np.sort(glob.glob(f"{outdir}/model-*.keras"))[-1]
+shutil.copy(best_model,f"{os.path.dirname(best_model)}/fit_conv_model.keras")
 
 #load the best-val_loss model
-conv_model = load_model(f"{outdir}/fit_conv_model.h5",compile=False) #False b/c no more training
+conv_model = load_model(f"{outdir}/fit_conv_model.keras",compile=False) #False b/c no more training
 
 
 pickle.dump(history.history,open(os.path.join(outdir,"training_history.pkl"),"wb"),protocol=4)
