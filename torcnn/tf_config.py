@@ -20,42 +20,43 @@ def tf_config():
         batchsize = max([ngpu,1]) * 256
         targets = ['tornado']
   
-        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs"
+        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs2"
         # N.B. Can't have any "//" in the train_list or val_list!
-        train_list = [f"{tfrec_dir}/201[1-9]/2*/*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/*/*tfrec"]
-        val_list = [f"{tfrec_dir}/2023/2*/*/*.tfrec"]
+        train_list = [f"{tfrec_dir}/201[1-9]/2*/*tor*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/*tor*/*tfrec"]
+        val_list = [f"{tfrec_dir}/2023/2*/*tor*/*.tfrec"]
 
         outprefix = '/raid/jcintineo/torcnn/tests/2011-23/'
-        outdir = f'{outprefix}/test01'
+        outdir = f'{outprefix}/test05'
   
         # Inputs
-        inputs.append(['Reflectivity','Velocity','SpectrumWidth','AzShear','DivShear','RhoHV','PhiDP','Zdr'])
-        scalar_vars = ['rangeExtractCenter']
+        #inputs.append(['Reflectivity','Velocity','SpectrumWidth','AzShear','DivShear','RhoHV','PhiDP','Zdr'])
+        inputs.append(['Reflectivity', 'Velocity', 'range_folded_mask','range'?]
+        scalar_vars = []
   
-        ps = (192,192)
+        ps = (128,256)
         input_tuples = [(ps[0], ps[0], len(inputs[0]))]
       
   
         loss_fcn = 'binary_crossentropy' #tversky_coeff binary_crossentropy csi iou
-        learning_rate = 0.001
+        learning_rate = 0.01
         sample_weights = {} #{'dbz_thresh':30, 'clear_wt':0.25, 'precip_wt':1, 'pos_class_wt':10} #leave empty if you don't want sample weights
         class_weights = False
         #augmentations -- options: 'random_rotation:1', 'random_noise':0.1
         img_aug = {} #{'random_noise':0.1}
   
         #architecture
-        num_conv_filters = 32
+        num_conv_filters = 128
         bias_init = None #np.array([-2.52378297]) #this np.log([pos/neg]) ; see https://www.tensorflow.org/tutorials/structured_data/imbalanced_data
-        dropout_rate = 0.3
+        dropout_rate = 0.2
   
         num_encoding_blocks = 5
         num_conv_per_block = 2
-        nfmaps_by_block = [num_conv_filters, int(num_conv_filters*2), int(num_conv_filters*4),
-                           int(num_conv_filters*5), int(num_conv_filters*6)]
+        nfmaps_by_block = [num_conv_filters, int(num_conv_filters), int(num_conv_filters),
+                           int(num_conv_filters), int(num_conv_filters)]
         assert(len(nfmaps_by_block) == num_encoding_blocks)
         num_decoding_blocks = 0
   
-        dense_layers = [128, 16] # Number of nuerons per dense layer
+        dense_layers = [256, 32] # Number of nuerons per dense layer
   
   
   
@@ -73,7 +74,7 @@ def tf_config():
            'img_aug':img_aug,
            'sample_weights':sample_weights,
            'class_weights':class_weights,
-           'batch_norm':False,
+           'batch_norm':True,
            'bias_init':bias_init,
            'scalar_vars':scalar_vars,
            'channels':channels,

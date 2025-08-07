@@ -46,6 +46,7 @@ def get_metrics(num_targets=1):
 
   return metrics
 #---------------------------------------------------------------------------------------------------------------------------------
+
 def cnn(config):
 
     input_tuples = config['input_tuples']
@@ -62,7 +63,6 @@ def cnn(config):
 
     input_0 = layers.Input(shape=input_tuples[0], name='input_0')
     inputs = [input_0]
-    input_0  = layers.Rescaling(1./255)(input_0)
 
     # encoding
     for ii in range(num_encoding_blocks):
@@ -87,7 +87,6 @@ def cnn(config):
     if scalar_vars:
         scalar_input = layers.Input(shape=input_tuples[-1], name='input_1')
         inputs.append(scalar_input)
-        scalar_input  = layers.Rescaling(1./255)(scalar_input)
         conv = layers.concatenate([conv,scalar_input])
 
     # Dense layers

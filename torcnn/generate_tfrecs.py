@@ -20,6 +20,8 @@ import math
 from geopy.distance import geodesic
 from geopy.point import Point
 
+OUT_OF_RANGE = -999
+
 #--------------------------------------------------------------------------------------------------
 def get_sector_patch(lat, lon, ds, hs, varname):
 
@@ -30,14 +32,16 @@ def get_sector_patch(lat, lon, ds, hs, varname):
         lat (float): latitude of the center of patch
         lon (float): longitude of the center of patch
         ds (xarray dataset): the radar data and attributes
-        hs (int): halfsize of the patch
+        hs (tuple): tuple of ints for the halfsizes of the patch
         varname (str): variable name of the radar product
     Returns:
         rad_sector (np.ndarray): the patch/sector of radar data
         theta_sector (np.ndarray): the patch/sector of azimuths (in degrees)
         r_sector (np.ndarray): the patch/sector of ranges (in km)
     """
-  
+
+    az_hs, range_hs = hs 
+ 
     raddata = ds[varname].values
     theta = ds['Azimuth'].values
     gate_width = ds['GateWidth'].values.mean() # Assuming GateWidth is relatively constant
@@ -53,19 +57,26 @@ def get_sector_patch(lat, lon, ds, hs, varname):
 
     # Azimuth slicing
     num_azimuths = len(theta)
-    start_az_slice = azimuth_idx - hs
-    end_az_slice = azimuth_idx + hs
+    start_az_slice = azimuth_idx - az_hs
+    end_az_slice = azimuth_idx + az_hs
 
     # Gate slicing (clamped)
     num_gates_limited = len(r_km)
-    start_gate_slice = max(0, gate_idx - hs)
-    end_gate_slice = min(num_gates_limited, gate_idx + hs)
+    start_gate_slice = max(0, gate_idx - range_hs)
+    end_gate_slice = min(num_gates_limited, gate_idx + range_hs)
     
-    # See if we're too close to the radar. If so, pad with missing value.
-    if gate_idx - hs < 0:
-        gate_pad = True
+
+    # See if we're too close or too far from the radar. If so, pad with missing value.
+    if gate_idx - range_hs < 0:
+        gate_pad_low = True
+        gate_pad_high = False
+        n_extra_gates = range_hs - gate_idx
+    elif gate_idx + range_hs > num_gates_limited:
+        gate_pad_low = False
+        gate_pad_high = True
+        n_extra_gates = gate_idx + range_hs - num_gates_limited
     else:
-        gate_pad = False
+        gate_pad_low = gate_pad_high = False
 
     if end_az_slice > num_azimuths:
         # Indicates that we're wrapping around 0 degrees
@@ -73,10 +84,12 @@ def get_sector_patch(lat, lon, ds, hs, varname):
                         raddata[start_az_slice:num_azimuths, start_gate_slice:end_gate_slice],
                         raddata[0:(end_az_slice-num_azimuths), start_gate_slice:end_gate_slice]
         ])
-        if gate_pad:
-            patch_num_az = rad_sector.shape[0] 
-            padding = np.full((patch_num_az, abs(gate_idx-hs)), ds.attrs.get('MissingData'))
+        if gate_pad_low:
+            padding = np.full((az_hs*2, n_extra_gates), OUT_OF_RANGE)
             rad_sector = np.concatenate([padding, rad_sector], axis=1)
+        elif gate_pad_high:
+            padding = np.full((az_hs*2, n_extra_gates), OUT_OF_RANGE)
+            rad_sector = np.concatenate([rad_sector, padding], axis=1)
 
         theta_sector = np.concatenate([
                           theta[start_az_slice:num_azimuths],
@@ -89,10 +102,12 @@ def get_sector_patch(lat, lon, ds, hs, varname):
                         raddata[start_az_slice:, start_gate_slice:end_gate_slice],
                         raddata[0:end_az_slice, start_gate_slice:end_gate_slice]
         ])
-        if gate_pad:
-            patch_num_az = rad_sector.shape[0]
-            padding = np.full((patch_num_az, abs(gate_idx-hs)), ds.attrs.get('MissingData'))
+        if gate_pad_low:
+            padding = np.full((az_hs*2, n_extra_gates), OUT_OF_RANGE)
             rad_sector = np.concatenate([padding, rad_sector], axis=1)
+        elif gate_pad_high:
+            padding = np.full((az_hs*2, n_extra_gates), OUT_OF_RANGE)
+            rad_sector = np.concatenate([rad_sector, padding], axis=1)
 
         theta_sector = np.concatenate([
                           theta[start_az_slice:],
@@ -100,17 +115,22 @@ def get_sector_patch(lat, lon, ds, hs, varname):
         ])
     else:
         rad_sector = raddata[start_az_slice:end_az_slice, start_gate_slice:end_gate_slice]
-        if gate_pad:
-            patch_num_az = rad_sector.shape[0]
-            padding = np.full((patch_num_az, abs(gate_idx-hs)), ds.attrs.get('MissingData'))
+        if gate_pad_low:
+            padding = np.full((az_hs*2, n_extra_gates), OUT_OF_RANGE)
             rad_sector = np.concatenate([padding, rad_sector], axis=1)
+        elif gate_pad_high:
+            padding = np.full((az_hs*2, n_extra_gates), OUT_OF_RANGE)
+            rad_sector = np.concatenate([rad_sector, padding], axis=1)
 
         theta_sector = theta[start_az_slice:end_az_slice]
 
     # Range should be unaffected by azimuth wrapping
     r_sector = r_km[start_gate_slice:end_gate_slice]
-    if gate_pad:
-        r_sector = np.concatenate([np.zeros(abs(gate_idx-hs)), r_sector])
+    if gate_pad_low:
+        r_sector = np.concatenate([np.zeros(n_extra_gates), r_sector])
+    elif gate_pad_high:
+        gw = gate_width / 1000. # convert to km
+        r_sector = np.concatenate([r_sector, np.full(n_extra_gates), r_sector[-1] + gw])
 
     return rad_sector, theta_sector, r_sector, azimuth_idx, gate_idx
 
@@ -204,7 +224,8 @@ def collect_and_write_tfrec(row,
 
     info = {} # contains predictor and target data, and metadata
     info['stormID'] = row['stormID']
-    info['hs'] = hs
+    info['az_hs'] = hs[0]
+    info['range_hs'] = hs[1]
     info['radarTimestamp'] = row['radarTimestamp']
     info['tornado'] = row['tornado']
     info['hail'] = row['hail']
@@ -287,7 +308,7 @@ def collect_and_write_tfrec(row,
 
         # Assert that the shape is correct
         try:
-            assert(rad_sector.shape == (hs*2, hs*2))
+            assert(rad_sector.shape == (hs[0]*2, hs[1]*2))
         except AssertionError as err:
             print(f"{row['radar']}, {row['radarTimestamp']}, {varname}.shape == {rad_sector.shape}")
             return
@@ -297,31 +318,32 @@ def collect_and_write_tfrec(row,
             info['az_idx'] = az_idx
             info['gate_idx'] = gate_idx
             # Store range on first iter
-            #info['range'] = utils.bytescale(r_sector,
-            #                                bsinfo['range']['vmin'],
-            #                                bsinfo['range']['vmax'],
-            #                                min_byte_val=2,
-            #                                max_byte_val=255
-            #)
+            # 'range' is 1D!
+            info['range'] = np.expand_dims(utils.bytescale(r_sector,
+                                                           bsinfo['range']['vmin'],
+                                                           bsinfo['range']['vmax'],
+                                                           min_byte_val=1, # we also invert range, so keep it > 0
+                                                           max_byte_val=255
+                                           ), axis=-1
+            )
+            info['out_of_range_mask'] = np.expand_dims( (rad_sector == OUT_OF_RANGE).astype(np.uint8), axis=-1)
+     
 
-        # Make bad data masks
-        missing_data_value = radds.attrs.get('MissingData', -99900.0)
-        range_folded_value = radds.attrs.get('RangeFolded', -99901.0)
-        missing = (rad_sector == missing_data_value)
-        range_folded = (rad_sector == range_folded_value)
-  
         # Bytescale the data
         rad_sector_scaled = np.expand_dims(utils.bytescale(rad_sector,
                                                            bsinfo[varname]['vmin'],
                                                            bsinfo[varname]['vmax'],
-                                                           min_byte_val=2,
+                                                           min_byte_val=0,
                                                            max_byte_val=255
                                            ), axis=-1
         )
 
-        # Encode missing and range-folded regions
-        rad_sector_scaled[missing] = 0
-        rad_sector_scaled[range_folded] = 1
+        # Encode range-folded region
+        if varname == 'Velocity':
+            range_folded_value = radds.attrs.get('RangeFolded', -99901.0)
+            range_folded = (rad_sector == range_folded_value).astype(np.uint8)
+            info['range_folded_mask'] = np.expand_dims(range_folded, axis=-1)
+        
 
         # Add to info
         info[varname] = rad_sector_scaled
@@ -364,9 +386,9 @@ datapatt1 = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.5
 # 2019-2024
 datapatt2 = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
 
-outpatt = f'/raid/jcintineo/torcnn/tfrecs2/%Y/%Y%m%d/'
+outpatt = f'/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
 
-hs = halfsize = 96
+hs = halfsize = (64, 128)
 
 varnames = ['Velocity',
             'AzShear',
@@ -376,7 +398,6 @@ varnames = ['Velocity',
             'RhoHV',
             'PhiDP',
             'Zdr',
-        #    'range',
 ]
 
 # Get byte-scaling info

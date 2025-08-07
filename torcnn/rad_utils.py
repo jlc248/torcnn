@@ -168,7 +168,7 @@ def plot_ppi(file_path,
             figsize = (12,4)
             fs = 8
         else:
-            print('Too many variables to plot!')
+            print('Too many (or too few) variables to plot!')
             sys.exit(1)
 
         fig, axes = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=figsize, nrows=nrows, ncols=ncols)#, gridspec_kw={'wspace': 0.05, 'hspace': 0.05})
@@ -337,7 +337,6 @@ def plot_ppi(file_path,
         # theta should be 2D, r should be 2D for pcolormesh to work correctly
         # We need to broadcast theta and r to match the shape of raddata
         R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
-        
         c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax)
         
         if plot_segment:
