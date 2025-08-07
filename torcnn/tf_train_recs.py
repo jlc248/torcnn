@@ -132,7 +132,12 @@ def parse_tfrecord_fn(example):
     # Reshape the n-D inputs
     for inp in INPUTS:
         for chan in inp:
-            features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[0], PS[1],1])
+            if chan == 'range':
+                features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[1],1])  
+            elif chan == 'range_inv':
+                pass
+            else:
+                features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[0], PS[1],1])
 
     return features
 ##################################################################################################################
@@ -150,15 +155,29 @@ def prepare_sample(features):
     inputs = {}
 
     # These Inputs are already byte-scaled
-    for ii,inp in enumerate(INPUTS):  #for each tf.layers.Input in the model construction
+    for ii,inp in enumerate(INPUTS):  #for each keras.Input in the model construction
         for chIdx, varname in enumerate(inp):             #for each channel in the tf.layers.Input
-            data = features[varname]
+
+            # Handle the coordinate features
+            # Duplicate the 1D range vector (and range_inv) n_azimuths times 
+            if varname == 'range':
+                data = tf.cast(features[varname], tf.float32)
+                data = tf.repeat(tf.expand_dims(data, axis=0), repeats=PS[0], axis=0)
+            elif varname == 'range_inv':
+                data = tf.cast(features['range'], tf.float32)
+                data = tf.repeat(tf.expand_dims(1.0 / data, axis=0), repeats=PS[0], axis=0)
+            else:
+                data = tf.cast(features[varname], tf.float32)
+
             if chIdx == 0:
                 tensor = data
             else:
                 tensor = tf.concat([tensor, data], axis=2)
 
-        inputs[f'input_{ii}'] = tensor
+        if ii == 0:
+            inputs['radar'] = tensor
+        elif ii == 1:
+            inputs['coords'] = tensor
 
 
     if SCALAR_VARS:
@@ -170,7 +189,7 @@ def prepare_sample(features):
             else:
                 scalars = tf.stack([scalars, scalarTmp])
         # Using ii from block above
-        inputs[f'input_{ii+1}'] = scalars
+        inputs['scalars'] = scalars
 
     # Sample weight should be same shape as targetImage
     return inputs, targetInt #, sample_weight

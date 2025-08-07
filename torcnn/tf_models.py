@@ -1,18 +1,14 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.models import Model
-import tensorflow.keras.layers as layers
-import tensorflow.keras.optimizers
-from tensorflow.keras.regularizers import l2
-import sys
-#import losses
+import keras
 import tf_metrics
-import numpy as np
+from keras import ops
 try:
     import tensorflow_addons as tfa
 except ModuleNotFoundError:
     print("Warning: no tfa")
     pass
+
 ##############################################################################################
 def get_metrics(num_targets=1):
 
@@ -45,8 +41,123 @@ def get_metrics(num_targets=1):
           )
 
   return metrics
-#---------------------------------------------------------------------------------------------------------------------------------
 
+#---------------------------------------------------------------------------------------------------------------------------------
+# From TorNet
+@keras.saving.register_keras_serializable()
+class CoordConv2D(keras.layers.Layer):
+    """
+    Adopted from the CoordConv2d layers as described in 
+
+    Liu, Rosanne, et al. "An intriguing failing of convolutional neural networks and 
+    the coordconv solution." Advances in neural information processing systems 31 (2018).
+    
+    """
+    def __init__(self,filters,
+                      kernel_size,
+                      kernel_regularizer,
+                      activation,
+                      batch_norm=False,
+                      padding='same',
+                      strides=(1,1),
+                      conv2d_kwargs = {},
+                      **kwargs):
+
+        super(CoordConv2D, self).__init__(**kwargs)
+
+        self.filters = filters
+        self.kernel_size = kernel_size
+        self.kernel_regularizer = kernel_regularizer
+        self.activation = activation
+        self.batch_norm = batch_norm
+        self.padding = padding
+        self.strides = strides
+        self.conv2d_kwargs = conv2d_kwargs
+        self.strd = strides[0]  # assume equal strides
+
+        self.conv = keras.layers.Conv2D(
+            self.filters,
+            self.kernel_size,
+            kernel_regularizer=self.kernel_regularizer,
+            padding=self.padding,
+            strides=self.strides,
+            **conv2d_kwargs
+        )
+
+    def build(self, input_shape):
+        x_shape, coord_shape = input_shape
+        concat_shape = list(x_shape)
+        concat_shape[-1] += coord_shape[-1]
+        self.conv.build(concat_shape)
+
+    def call(self,inputs):
+        """
+        inputs is a tuple 
+           [N, L, W, C] data tensor,
+           [N, L, W, nd] tensor of coordiantes
+        """
+        x, coords = inputs
+
+        # Stack x with coordinates
+        x = ops.concatenate( (x,coords), axis=-1)
+
+        # Run convolution
+        conv=self.conv(x)
+
+        # Batch normalization
+        if self.batch_norm:
+            conv=keras.layers.BatchNormalization()(conv)
+
+        # Activation
+        conv = keras.layers.Activation(self.activation)(conv)
+
+        # The returned coordinates should have same shape as conv
+        # prep the coordiantes by slicing them to the same shape
+        # as conv
+        if self.padding=='same' and self.strd>1:
+            coords = coords[:,::self.strd,::self.strd]
+        elif self.padding=='valid':
+            # If valid padding,  need to start slightly off the corner
+            i0 = self.kernel_size[0]//2
+            if i0>0:
+                coords = coords[:,i0:-i0:self.strd,i0:-i0:self.strd]
+            else:
+                coords = coords[:,::self.strd,::self.strd]
+
+        return conv,coords
+
+    def get_config(self):
+        """Get model configuration, used for saving model."""
+        config = super().get_config()
+        config.update(
+            {   "filters": self.filters,
+                "kernel_size": self.kernel_size,
+                "kernel_regularizer": self.kernel_regularizer,
+                "activation":self.activation,
+                "padding": self.padding,
+                "strides": self.strides,
+                "conv2d_kwargs": self.conv2d_kwargs
+            }
+        )
+        return config
+
+#---------------------------------------------------------------------------------------------------------------------------------
+def conv_coord_block(x,c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, batch_norm=False, activation='relu', padding="same"):
+
+    
+    for _ in range(n_convs):
+        x,c = CoordConv2D(filters=filters,
+                          kernel_size=ksize,
+                          kernel_regularizer=keras.regularizers.l2(l2_reg),
+                          padding=padding,
+                          batch_norm=batch_norm,
+                          activation=activation)([x,c])
+    x = keras.layers.MaxPool2D(pool_size =2, strides =2, padding ='same')(x)
+    c = keras.layers.MaxPool2D(pool_size =2, strides =2, padding ='same')(c)
+    if drop_rate>0:
+        x = keras.layers.Dropout(rate=drop_rate)(x)
+    return x,c
+#---------------------------------------------------------------------------------------------------------------------------------
 def cnn(config):
 
     input_tuples = config['input_tuples']
@@ -55,57 +166,65 @@ def cnn(config):
     learning_rate = config['learning_rate']
     batch_norm = config['batch_norm']
     dor = config['dropout_rate']
+    l2_reg = config['l2_reg']
     scalar_vars = config['scalar_vars']
     padding = config['padding']
     num_encoding_blocks = config['num_encoding_blocks']
     num_conv_per_block = config['num_conv_per_block']
     nfmaps_by_block = config['nfmaps_by_block']
 
-    input_0 = layers.Input(shape=input_tuples[0], name='input_0')
+    input_0 = conv = keras.Input(shape=input_tuples[0], name='radar')
     inputs = [input_0]
+
+    # Coordinate info
+    # Assumes second input_tuple will be the coords.
+    # Should be (ntheta, nrange, 2)
+    ntheta, nrange, nradar = input_tuples[0]
+    assert(input_tuples[1] == (ntheta, nrange, 2))
+    coords = keras.Input(shape=input_tuples[1], name='coords')
 
     # encoding
     for ii in range(num_encoding_blocks):
         nfmaps = nfmaps_by_block[ii]
 
-        for jj in range(num_conv_per_block):
-            first_block_input = input_0 if(ii == 0 and jj == 0) else conv
-            conv = layers.Conv2D(nfmaps, filter_width, padding=padding, )(first_block_input)
-            if batch_norm:
-                conv = layers.BatchNormalization()(conv)
-            if conv_activation == 'leaky_relu':
-                conv = layers.LeakyReLU()(conv)
-            else:
-                layers.Activation(conv_activation)(conv)
-            if jj == num_conv_per_block - 1: #if last conv in the block
-                conv = layers.MaxPooling2D(pool_size=(2, 2))(conv)
+        conv, coords = conv_coord_block(conv,
+                                       coords,
+                                       filters=nfmaps,
+                                       ksize=filter_width,
+                                       l2_reg=l2_reg,
+                                       n_convs=num_conv_per_block,
+                                     #  drop_rate=dor, # do we want drop out in the Conv2Ds?
+                                       batch_norm=batch_norm,
+                                       activation=conv_activation,
+                                       padding=padding,
+        )
 
     # Flatten
-    conv = layers.Flatten()(conv)
+    conv = keras.layers.Flatten()(conv)
 
     #concatenate scalars
     if scalar_vars:
-        scalar_input = layers.Input(shape=input_tuples[-1], name='input_1')
+        scalar_input = keras.layers.Input(shape=input_tuples[-1], name='scalars')
         inputs.append(scalar_input)
-        conv = layers.concatenate([conv,scalar_input])
+        conv = keras.layers.concatenate([conv,scalar_input])
 
     # Dense layers
     for ii,nneurons in enumerate(config['dense_layers']):
-        conv = layers.Dense(nneurons)(conv)
+        conv = keras.layers.Dense(nneurons)(conv)
         if batch_norm:
-            conv = layers.BatchNormalization()(conv)
+            conv = keras.layers.BatchNormalization()(conv)
         if conv_activation == 'leaky_relu':
-            conv = layers.LeakyReLU()(conv)
+            conv = keras.layers.LeakyReLU()(conv)
         else:
-            layers.Activation(conv_activation)(conv)
+            keras.layers.Activation(conv_activation)(conv)
         if dor > 0:
-            conv = layers.Dropout(dor)(conv)
+            conv = keras.layers.Dropout(dor)(conv)
 
 
     # Dense output layer, equivalent to a logistic regression on the last layer
-    conv = layers.Dense(1)(conv)
-    conv = layers.Activation("sigmoid")(conv)
-    conv_model = Model(inputs=inputs,outputs=conv)
+    conv = keras.layers.Dense(1)(conv)
+    conv = keras.layers.Activation("sigmoid")(conv)
+    conv_model = keras.models.Model(inputs=inputs,outputs=conv)
 
     loss_fcn = config['loss_fcn']
     if config['loss_fcn'] == 'csi': #see page 21 of https://arxiv.org/pdf/2106.09757.pdf
@@ -122,7 +241,7 @@ def cnn(config):
     if optimizer.lower() == 'adabelief':
         opt = tfa.optimizers.AdaBelief
     else:
-        opt = getattr(tensorflow.keras.optimizers,config['optimizer'])
+        opt = getattr(keras.optimizers,config['optimizer'])
     conv_model.compile(optimizer = opt(learning_rate = learning_rate), loss = loss_fcn, metrics = METRICS)
     print(conv_model.summary())
 

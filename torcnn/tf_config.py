@@ -20,21 +20,24 @@ def tf_config():
         batchsize = max([ngpu,1]) * 256
         targets = ['tornado']
   
-        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs2"
-        # N.B. Can't have any "//" in the train_list or val_list!
+        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs"
+        # N.B. Can't have any "//" in the train_list or val_list!!!
         train_list = [f"{tfrec_dir}/201[1-9]/2*/*tor*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/*tor*/*tfrec"]
         val_list = [f"{tfrec_dir}/2023/2*/*tor*/*.tfrec"]
 
         outprefix = '/raid/jcintineo/torcnn/tests/2011-23/'
-        outdir = f'{outprefix}/test05'
+        outdir = f'{outprefix}/test06'
   
         # Inputs
         #inputs.append(['Reflectivity','Velocity','SpectrumWidth','AzShear','DivShear','RhoHV','PhiDP','Zdr'])
-        inputs.append(['Reflectivity', 'Velocity', 'range_folded_mask','range'?]
+        inputs.append(['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask'])
+        inputs.append(['range','range_inv']) # we need coords for coordconv
         scalar_vars = []
   
         ps = (128,256)
-        input_tuples = [(ps[0], ps[0], len(inputs[0]))]
+        input_tuples = [(ps[0], ps[1], len(inputs[0])),
+                        (ps[0], ps[1], len(inputs[1])),
+        ]
       
   
         loss_fcn = 'binary_crossentropy' #tversky_coeff binary_crossentropy csi iou
@@ -56,7 +59,7 @@ def tf_config():
         assert(len(nfmaps_by_block) == num_encoding_blocks)
         num_decoding_blocks = 0
   
-        dense_layers = [256, 32] # Number of nuerons per dense layer
+        dense_layers = [256, 16] # Number of nuerons per dense layer
   
   
   
@@ -78,7 +81,7 @@ def tf_config():
            'bias_init':bias_init,
            'scalar_vars':scalar_vars,
            'channels':channels,
-           'l2_param':0.0,
+           'l2_reg':0.0,
            'dropout_rate':dropout_rate,
            'batchsize':batchsize,
            'num_encoding_blocks':num_encoding_blocks,
