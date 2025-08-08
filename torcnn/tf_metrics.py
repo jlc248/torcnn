@@ -27,12 +27,14 @@ class csi(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
-        rank = tf.rank(y_pred).ndim
-
+        rank = y_pred.shape.rank
+       
+        tf.debugging.assert_equal(tf.shape(y_true), tf.shape(y_pred), message="Shape mismatch between y_true and y_pred.") 
+        
         if rank > 1:
             y_true = y_true[..., self.index]
             y_pred = y_pred[..., self.index]
-
+            
             channel_sample_weight = None
             if sample_weight is not None:
                 channel_sample_weight = sample_weight[..., self.index]
@@ -105,7 +107,9 @@ class pod(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
-        rank = tf.rank(y_pred).ndim
+        rank = y_pred.shape.rank
+
+        tf.debugging.assert_equal(tf.shape(y_true), tf.shape(y_pred), message="Shape mismatch between y_true and y_pred.")
 
         if rank > 1:
             y_true = y_true[..., self.index]
@@ -180,7 +184,9 @@ class far(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
-        rank = tf.rank(y_pred).ndim
+        rank = y_pred.shape.rank
+
+        tf.debugging.assert_equal(tf.shape(y_true), tf.shape(y_pred), message="Shape mismatch between y_true and y_pred.") 
 
         if rank > 1:
             y_true = y_true[..., self.index]
