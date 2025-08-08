@@ -115,16 +115,17 @@ def parse_tfrecord_fn(example):
    
     # Define the target features 
     for target in TARGETS:           
-        feature_description[target] = tf.io.FixedLenFeature([], tf.int64)
+        feature_description[target] = tf.io.FixedLenFeature([1], tf.int64)
 
     # Define scalar predictor features
     for scalar_var in SCALAR_VARS:
-        feature_description[scalar_var] = tf.io.FixedLenFeature([], tf.float32)
+        feature_description[scalar_var] = tf.io.FixedLenFeature([1], tf.float32)
     
     # Define the n-D predictor features
     for inp in INPUTS:
         for chan in inp:
-            feature_description[chan] =  tf.io.FixedLenFeature([], tf.string)
+            if chan != 'range_inv':
+                feature_description[chan] =  tf.io.FixedLenFeature([], tf.string)
 
     # Parse the single example
     features = tf.io.parse_single_example(example, feature_description)
@@ -135,7 +136,8 @@ def parse_tfrecord_fn(example):
             if chan == 'range':
                 features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[1],1])  
             elif chan == 'range_inv':
-                pass
+                # tf.identity copies the tensor ('range' must be before 'range_inv' in input_tuples[1])
+                features[chan] = tf.identity(features['range'])
             else:
                 features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[0], PS[1],1])
 
@@ -158,16 +160,15 @@ def prepare_sample(features):
     for ii,inp in enumerate(INPUTS):  #for each keras.Input in the model construction
         for chIdx, varname in enumerate(inp):             #for each channel in the tf.layers.Input
 
+            data = tf.cast(features[varname], tf.float32)
+
             # Handle the coordinate features
             # Duplicate the 1D range vector (and range_inv) n_azimuths times 
             if varname == 'range':
-                data = tf.cast(features[varname], tf.float32)
                 data = tf.repeat(tf.expand_dims(data, axis=0), repeats=PS[0], axis=0)
             elif varname == 'range_inv':
-                data = tf.cast(features['range'], tf.float32)
                 data = tf.repeat(tf.expand_dims(1.0 / data, axis=0), repeats=PS[0], axis=0)
-            else:
-                data = tf.cast(features[varname], tf.float32)
+                
 
             if chIdx == 0:
                 tensor = data
@@ -394,7 +395,7 @@ pickle.dump(config,open(os.path.join(outdir,'model_config.pkl'),'wb'))
 #===================================================================================================================#
 
 csvlogger = CSVLogger(f"{outdir}/log.csv", append=True)
-early_stopping = EarlyStopping(monitor='val_loss', patience=config['es_patience'], min_delta=0.00005)
+early_stopping = EarlyStopping(monitor='val_loss', patience=config['es_patience'], min_delta=0.0001)
 mcp_save = ModelCheckpoint(os.path.join(outdir,'model-{epoch:02d}-{val_loss:03f}.keras'),save_best_only=True, monitor='val_loss', mode='min')
 reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', cooldown=config['rlr_cooldown'], verbose=1,# min_delta=0.00001,
                  factor=config['rlr_factor'], patience=config['rlr_patience'], mode='min')
