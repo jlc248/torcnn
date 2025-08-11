@@ -185,5 +185,9 @@ def decode_and_visualize_tfrecord(
 
 
 #tfrec='/raid/jcintineo/torcnn/tfrecs/2013/20130519//tor/KTLX_35.32_-97.12_20130519-232322.tfrec'
-tfrec='/raid/jcintineo/torcnn/tfrecs/2017/20170429//tor/KFWS_32.55_-95.93_20170429-230946.tfrec'
+#tfrec='/raid/jcintineo/torcnn/tfrecs/2017/20170429//tor/KFWS_32.55_-95.93_20170429-230946.tfrec'
+#tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200521/tor/KGLD_37.92_-102.31_20200521-215207.tfrec'
+#tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200522/tor/KGSP_35.1_-81.5_20200522-192612.tfrec'
+#tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200523/tor/KDVN_41.78_-91.4_20200523-173539.tfrec' # "upside down" cell?
+tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200607/tor/KABR_44.91_-99.45_20200607-231744.tfrec' # some space-time displacement
 decode_and_visualize_tfrecord(tfrec, image_dtype=np.uint8)

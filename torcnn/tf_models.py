@@ -8,7 +8,7 @@ try:
 except ModuleNotFoundError:
     print("Warning: no tfa")
     pass
-
+    
 ##############################################################################################
 def get_metrics(num_targets=1):
 
@@ -18,7 +18,9 @@ def get_metrics(num_targets=1):
   for ii in range(num_targets):
 
       metrics.append(tf_metrics.AUC(name=f'auprc_index{ii}', curve='PR', index=ii))
+      #metrics.append(tf.keras.metrics.AUC(name='default_aupr', curve='PR'))
       metrics.append(tf_metrics.BrierScore(name=f'brier_score_index{ii}', index=ii))
+
 
       for lev in levs:
           metrics.append(tf_metrics.csi(use_soft_discretization=False,
@@ -84,6 +86,11 @@ class CoordConv2D(keras.layers.Layer):
             **conv2d_kwargs
         )
 
+        self.activ_layer = keras.layers.Activation(self.activation)
+
+        if batch_norm:
+            self.bn_layer = keras.layers.BatchNormalization()
+
     def build(self, input_shape):
         x_shape, coord_shape = input_shape
         concat_shape = list(x_shape)
@@ -106,10 +113,10 @@ class CoordConv2D(keras.layers.Layer):
 
         # Batch normalization
         if self.batch_norm:
-            conv=keras.layers.BatchNormalization()(conv)
+            conv=self.bn_layer(conv)
 
         # Activation
-        conv = keras.layers.Activation(self.activation)(conv)
+        conv = self.activ_layer(conv)
 
         # The returned coordinates should have same shape as conv
         # prep the coordiantes by slicing them to the same shape
@@ -173,8 +180,8 @@ def cnn(config):
     num_conv_per_block = config['num_conv_per_block']
     nfmaps_by_block = config['nfmaps_by_block']
 
-    input_0 = conv = keras.Input(shape=input_tuples[0], name='radar')
-    inputs = [input_0]
+    radar = conv = keras.Input(shape=input_tuples[0], name='radar')
+    inputs = [radar]
 
     # Coordinate info
     # Assumes second input_tuple will be the coords.
@@ -182,6 +189,7 @@ def cnn(config):
     ntheta, nrange, nradar = input_tuples[0]
     assert(input_tuples[1] == (ntheta, nrange, 2))
     coords = keras.Input(shape=input_tuples[1], name='coords')
+    inputs.append(coords)
 
     # encoding
     for ii in range(num_encoding_blocks):
