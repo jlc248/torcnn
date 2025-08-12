@@ -149,9 +149,8 @@ class CoordConv2D(keras.layers.Layer):
         return config
 
 #---------------------------------------------------------------------------------------------------------------------------------
-def conv_coord_block(x,c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, batch_norm=False, activation='relu', padding="same"):
+def conv_coord_block(x, c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, batch_norm=False, activation='relu', padding="same"):
 
-    
     for _ in range(n_convs):
         x,c = CoordConv2D(filters=filters,
                           kernel_size=ksize,
@@ -164,6 +163,20 @@ def conv_coord_block(x,c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate
     if drop_rate>0:
         x = keras.layers.Dropout(rate=drop_rate)(x)
     return x,c
+#---------------------------------------------------------------------------------------------------------------------------------
+def conv_block(x, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, batch_norm=False, activation='relu', padding="same"):
+
+    for _ in range(n_convs):
+        x = keras.layers.Conv2D(filters=filters,
+                          kernel_size=ksize,
+                          kernel_regularizer=keras.regularizers.l2(l2_reg),
+                          padding=padding)(x)
+        if batch_norm:
+            x = keras.layers.BatchNormalization()(x)
+        x = keras.layers.Activation(activation)(x)
+    x = keras.layers.MaxPool2D(pool_size =2, strides =2, padding ='same')(x)
+        
+    return x
 #---------------------------------------------------------------------------------------------------------------------------------
 def cnn(config):
 
@@ -179,23 +192,26 @@ def cnn(config):
     num_encoding_blocks = config['num_encoding_blocks']
     num_conv_per_block = config['num_conv_per_block']
     nfmaps_by_block = config['nfmaps_by_block']
+    coord_conv = config['coord_conv']
 
     radar = conv = keras.Input(shape=input_tuples[0], name='radar')
     inputs = [radar]
 
-    # Coordinate info
-    # Assumes second input_tuple will be the coords.
-    # Should be (ntheta, nrange, 2)
-    ntheta, nrange, nradar = input_tuples[0]
-    assert(input_tuples[1] == (ntheta, nrange, 2))
-    coords = keras.Input(shape=input_tuples[1], name='coords')
-    inputs.append(coords)
+    if coord_conv:
+        # Coordinate info
+        # Assumes second input_tuple will be the coords.
+        # Should be (ntheta, nrange, 2)
+        ntheta, nrange, nradar = input_tuples[0]
+        assert(input_tuples[1] == (ntheta, nrange, 2))
+        coords = keras.Input(shape=input_tuples[1], name='coords')
+        inputs.append(coords)
 
     # encoding
     for ii in range(num_encoding_blocks):
         nfmaps = nfmaps_by_block[ii]
 
-        conv, coords = conv_coord_block(conv,
+        if coord_conv:
+            conv, coords = conv_coord_block(conv,
                                        coords,
                                        filters=nfmaps,
                                        ksize=filter_width,
@@ -206,6 +222,18 @@ def cnn(config):
                                        activation=conv_activation,
                                        padding=padding,
         )
+
+        else:
+            conv = conv_block(conv,
+                              filters=nfmaps,
+                              ksize=filter_width,
+                              l2_reg=l2_reg,
+                              n_convs=num_conv_per_block,
+                              batch_norm=batch_norm,
+                              activation=conv_activation,
+                              padding=padding,
+            )  
+
 
     # Flatten
     conv = keras.layers.Flatten()(conv)

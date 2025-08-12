@@ -136,7 +136,7 @@ def parse_tfrecord_fn(example):
             if chan == 'range':
                 features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[1],1])  
             elif chan == 'range_inv':
-                # tf.identity copies the tensor ('range' must be before 'range_inv' in input_tuples[1])
+                # tf.identity copies the tensor ('range' must be before 'range_inv' in input_tuples[x])
                 features[chan] = tf.identity(features['range'])
             else:
                 features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[0], PS[1],1])
