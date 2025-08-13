@@ -330,39 +330,110 @@ class BrierScore(tf.keras.metrics.Metric):
 
 #------------------------------------------------------------------------------------------------
 
-#Observed counts. The numerator for reliability.
-def obs_ct(threshold1,threshold2,name='reliability'):
-  def obs_ct(target_tensor, prediction_tensor):
+class ObsCt(tf.keras.metrics.Metric):
+    """
+    A custom metric that counts the number of hits.
 
-    condition = tf.logical_and(prediction_tensor >= threshold1, prediction_tensor < threshold2)
+    A hit is defined as a case where the prediction value is within a specified
+    range [threshold1, threshold2) and the target value is 1.
 
-    prediction_tensor = tf.where(condition, 1., 0.)
-    target_tensor = tf.cast(target_tensor, tf.float32)
+    Args:
+        threshold1: The lower bound (inclusive) for the prediction value.
+        threshold2: The upper bound (exclusive) for the prediction value.
+        name: (Optional) string name of the metric instance.
+        dtype: (Optional) data type of the metric result.
+    """
+    def __init__(self, threshold1, threshold2, name='obs_ct', dtype=tf.float32):
+        super(ObsCt, self).__init__(name=name, dtype=dtype)
+        self.threshold1 = threshold1
+        self.threshold2 = threshold2
+        self.total_hits = self.add_weight(name='total_hits', initializer='zeros', dtype=tf.float64)
 
-    num_hits = K.sum(target_tensor * prediction_tensor)
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        """
+        Updates the state of the metric with a new mini-batch.
+        """
+        # Cast inputs to the correct dtype
+        y_true = tf.cast(y_true, self.dtype)
+        y_pred = tf.cast(y_pred, self.dtype)
 
-    return num_hits
+        # Apply the logic from the original function
+        condition = tf.logical_and(y_pred >= self.threshold1, y_pred < self.threshold2)
+        prediction_is_in_range = tf.where(condition, 1.0, 0.0)
 
-  obs_ct.__name__ = name
+        # Calculate hits for the current batch
+        batch_hits = tf.reduce_sum(y_true * prediction_is_in_range)
 
-  return obs_ct
+        # Accumulate the total number of hits
+        self.total_hits.assign_add(batch_hits)
+
+    def result(self):
+        """
+        Computes and returns the final metric value.
+        """
+        # The result is simply the total accumulated hits.
+        return self.total_hits
+
+    def reset_state(self):
+        """
+        Resets all metric state variables.
+        """
+        self.total_hits.assign(0.0)
+
 #------------------------------------------------------------------------------------------------
-#Forecast counts. The denomenator for reliability.
-def fcst_ct(threshold1,threshold2,name='reliability'):
-  def fcst_ct(target_tensor, prediction_tensor):
 
-    condition = tf.logical_and(prediction_tensor >= threshold1, prediction_tensor < threshold2)
+import tensorflow as tf
 
-    prediction_tensor = tf.where(condition, 1., 0.)
+class FcstCt(tf.keras.metrics.Metric):
+    """
+    A custom metric that counts predictions within a specified range.
 
-    #target_tensor = tf.cast(target_tensor, tf.float32)
+    This metric counts the number of predictions that are greater than or
+    equal to threshold1 and less than threshold2.
 
-    num_valid_preds = K.sum(prediction_tensor)
-    #num_hits = K.sum(target_tensor * prediction_tensor)
+    Args:
+        threshold1: The lower bound (inclusive) for the prediction value.
+        threshold2: The upper bound (exclusive) for the prediction value.
+        name: (Optional) string name of the metric instance.
+        dtype: (Optional) data type of the metric result.
+    """
+    def __init__(self, threshold1, threshold2, name='fcst_ct', dtype=tf.float32):
+        super(FcstCt, self).__init__(name=name, dtype=dtype)
+        self.threshold1 = threshold1
+        self.threshold2 = threshold2
+        self.total_valid_preds = self.add_weight(name='total_valid_preds', initializer='zeros', dtype=tf.float64)
 
-    return num_valid_preds
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        """
+        Updates the state of the metric with a new mini-batch.
+        
+        Note: The `y_true` argument is required by the Keras API but is not
+        used in this metric's calculation, as it only evaluates predictions.
+        """
+        # Cast input to the correct dtype
+        y_pred = tf.cast(y_pred, self.dtype)
 
-  fcst_ct.__name__ = name
+        # Apply the logic from the original function
+        condition = tf.logical_and(y_pred >= self.threshold1, y_pred < self.threshold2)
+        prediction_is_in_range = tf.where(condition, 1.0, 0.0)
 
-  return fcst_ct
+        # Calculate the number of valid predictions for the current batch
+        batch_valid_preds = tf.reduce_sum(prediction_is_in_range)
+
+        # Accumulate the total number of valid predictions
+        self.total_valid_preds.assign_add(batch_valid_preds)
+
+    def result(self):
+        """
+        Computes and returns the final metric value.
+        """
+        # The result is simply the total accumulated count of valid predictions.
+        return self.total_valid_preds
+
+    def reset_state(self):
+        """
+        Resets all metric state variables.
+        """
+        self.total_valid_preds.assign(0.0)
+
 #------------------------------------------------------------------------------------------------

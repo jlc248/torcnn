@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 import os,sys
 import tensorflow as tf
-from torp_dataset import TORPDataset
+from torp.torp_dataset import TORPDataset
 import utils
 import rad_utils
 import xarray
@@ -130,7 +130,7 @@ def get_sector_patch(lat, lon, ds, hs, varname):
         r_sector = np.concatenate([np.zeros(n_extra_gates), r_sector])
     elif gate_pad_high:
         gw = gate_width / 1000. # convert to km
-        r_sector = np.concatenate([r_sector, np.full(n_extra_gates), r_sector[-1] + gw])
+        r_sector = np.concatenate([r_sector, np.full(n_extra_gates, r_sector[-1] + gw)])
 
     return rad_sector, theta_sector, r_sector, azimuth_idx, gate_idx
 
@@ -363,85 +363,87 @@ def collect_and_write_tfrec(row,
 #----------------------------------------------------------------------------------------------------------
 #----------------------------------------------------------------------------------------------------------
 
-# Drive the parallel processing
+if __name__ == "__main__":
 
-dataset_type = 'Storm_Reports' # 'Storm_Reports' or 'pretornadic'
-
-# Load torp dataset
-dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/',
-                      years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
-                      dataset_type=dataset_type
-)
-ds = dataset.load_dataframe()
-
-# Make EFU = -1
-ds.loc[ds.magnitude == 'U', 'magnitude'] = -1
-# Convert to numeric
-ds.magnitude = pd.to_numeric(ds.magnitude)
-
-#ds = ds[(ds.tornado == 1) & (ds.magnitude >= 4)]
-
-# 2011-2018
-datapatt1 = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
-# 2019-2024
-datapatt2 = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
-
-outpatt = f'/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
-
-hs = halfsize = (64, 128)
-
-varnames = ['Velocity',
-            'AzShear',
-            'DivShear',
-            'SpectrumWidth',
-            'Reflectivity',
-            'RhoHV',
-            'PhiDP',
-            'Zdr',
-]
-
-# Get byte-scaling info
-bsinfo = utils.get_bsinfo()
-
-logger = logging.getLogger(__name__)
-logger.info(f"begin extract data and write TFRecords")
-
-# Common arguments to pass in
-# Do these varnames need to match those in the function?
-# I assume so. 
-collect_and_write_tfrec_args = dict(
-    hs=halfsize,
-    varnames=varnames,
-    bsinfo=bsinfo,
-    datapatt1=datapatt1,
-    outpatt=outpatt,
-    datapatt2=datapatt2,
-    year_thresh=2019,
-)
-partial_collect_and_write_tfrec = functools.partial(collect_and_write_tfrec, **collect_and_write_tfrec_args)
-
-number_of_rows = len(ds)
-
-max_workers = 20 #min(gfs_columns_extract_workers, os.cpu_count())
-
-with tqdm(total=number_of_rows) as pbar: # progress bar
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-
-        for row in ds.itertuples():
-            # Convert the Pandas namedtuple-like object to a regular dictionary.
-            # This makes sure only simple, pickleable values are passed.
-            # You can also cherry-pick specific columns if 'row' has too many.
-            row_as_dict = row._asdict() # This converts it to an OrderedDict, which is pickleable
-            
-            futures.append(executor.submit(partial_collect_and_write_tfrec, row_as_dict))
-
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                logger.error(f"Error processing a row: {e}")
-                logger.error(traceback.format_exc())
-            finally: 
-                pbar.update(1)
+    # Drive the parallel processing
+    
+    dataset_type = 'Storm_Reports' # 'Storm_Reports' or 'pretornadic'
+    
+    # Load torp dataset
+    dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/',
+                          years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
+                          dataset_type=dataset_type
+    )
+    ds = dataset.load_dataframe()
+    
+    # Make EFU = -1
+    ds.loc[ds.magnitude == 'U', 'magnitude'] = -1
+    # Convert to numeric
+    ds.magnitude = pd.to_numeric(ds.magnitude)
+    
+    #ds = ds[(ds.tornado == 1) & (ds.magnitude >= 4)]
+    
+    # 2011-2018
+    datapatt1 = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+    # 2019-2024
+    datapatt2 = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+    
+    outpatt = f'/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
+    
+    hs = halfsize = (64, 128)
+    
+    varnames = ['Velocity',
+                'AzShear',
+                'DivShear',
+                'SpectrumWidth',
+                'Reflectivity',
+                'RhoHV',
+                'PhiDP',
+                'Zdr',
+    ]
+    
+    # Get byte-scaling info
+    bsinfo = utils.get_bsinfo()
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"begin extract data and write TFRecords")
+    
+    # Common arguments to pass in
+    # Do these varnames need to match those in the function?
+    # I assume so. 
+    collect_and_write_tfrec_args = dict(
+        hs=halfsize,
+        varnames=varnames,
+        bsinfo=bsinfo,
+        datapatt1=datapatt1,
+        outpatt=outpatt,
+        datapatt2=datapatt2,
+        year_thresh=2019,
+    )
+    partial_collect_and_write_tfrec = functools.partial(collect_and_write_tfrec, **collect_and_write_tfrec_args)
+    
+    number_of_rows = len(ds)
+    
+    max_workers = 20 #min(gfs_columns_extract_workers, os.cpu_count())
+    
+    with tqdm(total=number_of_rows) as pbar: # progress bar
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+    
+            for row in ds.itertuples():
+                # Convert the Pandas namedtuple-like object to a regular dictionary.
+                # This makes sure only simple, pickleable values are passed.
+                # You can also cherry-pick specific columns if 'row' has too many.
+                row_as_dict = row._asdict() # This converts it to an OrderedDict, which is pickleable
+                
+                futures.append(executor.submit(partial_collect_and_write_tfrec, row_as_dict))
+    
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Error processing a row: {e}")
+                    logger.error(traceback.format_exc())
+                finally: 
+                    pbar.update(1)
 

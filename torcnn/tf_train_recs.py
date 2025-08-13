@@ -192,7 +192,7 @@ def prepare_sample(features):
         # Using ii from block above
         inputs['scalars'] = scalars
 
-    # Sample weight should be same shape as targetImage
+    # Sample weight should be same shape as targetInt
     return inputs, targetInt #, sample_weight
 
 #################################################################################################################################
