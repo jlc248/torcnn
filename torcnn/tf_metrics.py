@@ -1,8 +1,8 @@
 import tensorflow as tf
-import tensorflow.keras.backend as K
+import keras
 
 #------------------------------------------------------------------------------------------------
-
+@keras.saving.register_keras_serializable()
 class csi(tf.keras.metrics.Metric):
     """
     A custom Keras Metric to calculate the Critical Success Index (CSI)
@@ -84,6 +84,7 @@ class csi(tf.keras.metrics.Metric):
 
 #------------------------------------------------------------------------------------------------
 
+@keras.saving.register_keras_serializable()
 class pod(tf.keras.metrics.Metric):
     """
     A custom Keras Metric to calculate the Probability of Detection (POD)
@@ -161,6 +162,7 @@ class pod(tf.keras.metrics.Metric):
 
 #------------------------------------------------------------------------------------------------
 
+@keras.saving.register_keras_serializable()
 class far(tf.keras.metrics.Metric):
     """
     A custom Keras Metric to calculate the False Alarm Rate (FAR)
@@ -238,6 +240,7 @@ class far(tf.keras.metrics.Metric):
 
 #------------------------------------------------------------------------------------------------
 
+@keras.saving.register_keras_serializable()
 class AUC(tf.keras.metrics.Metric):
     def __init__(self, name='aupr', curve='PR', index=0, **kwargs):
         super().__init__(name=name, **kwargs)
@@ -246,7 +249,7 @@ class AUC(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
-        rank = tf.rank(y_pred).ndim
+        rank = y_pred.shape.rank
 
         if rank > 1:
             y_true = y_true[..., self.index]
@@ -273,6 +276,7 @@ class AUC(tf.keras.metrics.Metric):
         self.auc_metric.reset_state()
 #------------------------------------------------------------------------------------------------
 
+@keras.saving.register_keras_serializable()
 class BrierScore(tf.keras.metrics.Metric):
     def __init__(self, name='brier_score', index=0, **kwargs):
         super().__init__(name=name, **kwargs)
@@ -283,7 +287,7 @@ class BrierScore(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
-        rank = tf.rank(y_pred).ndim
+        rank = y_pred.shape.rank
 
         if rank > 1:
             y_true = y_true[..., self.index]
@@ -330,6 +334,7 @@ class BrierScore(tf.keras.metrics.Metric):
 
 #------------------------------------------------------------------------------------------------
 
+@keras.saving.register_keras_serializable()
 class ObsCt(tf.keras.metrics.Metric):
     """
     A custom metric that counts the number of hits.
@@ -343,16 +348,25 @@ class ObsCt(tf.keras.metrics.Metric):
         name: (Optional) string name of the metric instance.
         dtype: (Optional) data type of the metric result.
     """
-    def __init__(self, threshold1, threshold2, name='obs_ct', dtype=tf.float32):
+    def __init__(self, threshold1, threshold2, name='obs_ct', index=0, dtype=tf.float32):
         super(ObsCt, self).__init__(name=name, dtype=dtype)
         self.threshold1 = threshold1
         self.threshold2 = threshold2
+        self.index = index
         self.total_hits = self.add_weight(name='total_hits', initializer='zeros', dtype=tf.float64)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         """
         Updates the state of the metric with a new mini-batch.
         """
+
+        # Determine the rank of the tensors.
+        rank = y_pred.shape.rank
+
+        if rank > 1:
+            y_true = y_true[..., self.index]
+            y_pred = y_pred[..., self.index]
+
         # Cast inputs to the correct dtype
         y_true = tf.cast(y_true, self.dtype)
         y_pred = tf.cast(y_pred, self.dtype)
@@ -384,6 +398,7 @@ class ObsCt(tf.keras.metrics.Metric):
 
 import tensorflow as tf
 
+@keras.saving.register_keras_serializable()
 class FcstCt(tf.keras.metrics.Metric):
     """
     A custom metric that counts predictions within a specified range.
@@ -397,10 +412,11 @@ class FcstCt(tf.keras.metrics.Metric):
         name: (Optional) string name of the metric instance.
         dtype: (Optional) data type of the metric result.
     """
-    def __init__(self, threshold1, threshold2, name='fcst_ct', dtype=tf.float32):
+    def __init__(self, threshold1, threshold2, name='fcst_ct', index=0, dtype=tf.float32):
         super(FcstCt, self).__init__(name=name, dtype=dtype)
         self.threshold1 = threshold1
         self.threshold2 = threshold2
+        self.index = index
         self.total_valid_preds = self.add_weight(name='total_valid_preds', initializer='zeros', dtype=tf.float64)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
@@ -410,6 +426,13 @@ class FcstCt(tf.keras.metrics.Metric):
         Note: The `y_true` argument is required by the Keras API but is not
         used in this metric's calculation, as it only evaluates predictions.
         """
+
+        # Determine the rank of the tensors.
+        rank = y_pred.shape.rank
+        
+        if rank > 1:
+            y_pred = y_pred[..., self.index]
+
         # Cast input to the correct dtype
         y_pred = tf.cast(y_pred, self.dtype)
 

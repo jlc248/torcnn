@@ -4,11 +4,14 @@ import pickle
 from sklearn.ensemble import RandomForestClassifier
 import os
 
+# Use conda environment "old_sklearn"!
+
 outdir = '/raid/jcintineo/torcnn/torp_datasets/eval2023/no_spout/'
 os.makedirs(outdir, exist_ok=True)
 
 # Read the data from the CSV file
-df = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2023_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
+#df = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2023_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
+df = pd.read_csv('/raid/jcintineo/torcnn/eval/nospout_2023/torp_2023_nospout_cleaned.csv')
 
 # Load the list of feature names from the pickle file
 with open('torp_features.pkl', 'rb') as f:
