@@ -22,23 +22,26 @@ def tf_config():
   
         tfrec_dir = "/raid/jcintineo/torcnn/tfrecs"
         # N.B. Can't have any "//" in the train_list or val_list!!!
-        train_list = [f"{tfrec_dir}/201[1-9]/2*/*tor*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/*tor*/*tfrec"]
-        val_list = [f"{tfrec_dir}/2023/2*/*tor*/*.tfrec"]
+        # subdirs: nontor, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
+        train_list = [f"{tfrec_dir}/201[1-9]/2*/[n,t]*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/[n,t]*/*tfrec", f"{tfrec_dir}/201[1-6]/2*/pretor*/*tfrec"]
+        val_list = [f"{tfrec_dir}/2023/2*/[n,t]*/*.tfrec", f"{tfrec_dir}/2017/2*/pretor*/*tfrec"]
 
         outprefix = '/raid/jcintineo/torcnn/tests/2011-23/'
-        outdir = f'{outprefix}/test06'
+        outdir = f'{outprefix}/test20'
   
         # Inputs
-        #inputs.append(['Reflectivity','Velocity','SpectrumWidth','AzShear','DivShear','RhoHV','PhiDP','Zdr'])
-        inputs.append(['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask'])
-        inputs.append(['range','range_inv']) # we need coords for coordconv
+        # 'Reflectivity', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear', 'RhoHV', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range', 'range_inv'
+        inputs.append(['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask', 'range'])
+        #inputs.append(['range','range_inv']) # we need coords for coordconv
         scalar_vars = []
   
         ps = (128,256)
-        input_tuples = [(ps[0], ps[1], len(inputs[0])),
-                        (ps[0], ps[1], len(inputs[1])),
-        ]
-      
+        input_tuples = [(ps[0], ps[1], len(inputs[0]))]
+        if len(inputs) == 2:
+            input_tuples.append( (ps[0], ps[1], len(inputs[1])) )
+     
+        # Use coordinate convolution?
+        coord_conv = False 
   
         loss_fcn = 'binary_crossentropy' #tversky_coeff binary_crossentropy csi iou
         learning_rate = 0.01
@@ -73,6 +76,7 @@ def tf_config():
         input_tuples.append((len(scalar_vars),))
   
     return {
+           'coord_conv':coord_conv,
            'ps':ps,
            'img_aug':img_aug,
            'sample_weights':sample_weights,
