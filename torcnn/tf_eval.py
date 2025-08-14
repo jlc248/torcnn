@@ -32,6 +32,13 @@ parser.add_argument(
     type=str,
 )
 parser.add_argument(
+    "-f",
+    "--filelist",
+    help="Use this list of files for colated predictions with TORP.",
+    type=str,
+    default=[],
+)
+parser.add_argument(
     "--mask",
     help="Set this to mask predictions.",
     action="store_true"
@@ -60,6 +67,11 @@ model_file = args.model if (args.model) else f"{indir}/fit_conv_model.keras"
 
 outdir = args.outdir if (args.outdir) else os.path.join(indir, "TEST")
 
+if args.filelist:
+    filelist = pickle.load(open(args.filelist, 'rb'))
+else:
+    filelist = []
+
 ncpus = args.ncpus
 ngpu = args.ngpus
 mask = args.mask
@@ -71,11 +83,11 @@ TARGETS = config["targets"]
 SCALAR_VARS = config["scalar_vars"] 
 
 if ngpu == 0:
-    batchsize = 512
+    batchsize = 256
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 else:
-    batchsize = ngpu * 512
+    batchsize = ngpu * 256
 # else:
 #  os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 #  os.environ["CUDA_VISIBLE_DEVICES"]="2" #hard-coded!
@@ -108,28 +120,30 @@ for gpu in gpus:
 # ------------------------------------------------------------------------------------------------------------------------------------------------------
 def get_metrics():
 
-    metrics = [
-        "accuracy",
-        tf.keras.metrics.AUC(name="aupr", curve="PR"),
-        tf.keras.metrics.MeanSquaredError(name="brier_score"),
-    ]
+    metrics = ["accuracy"]
 
     custom_metrics = collections.OrderedDict()
     custom_metrics["loss"] = "foo"
     custom_metrics["accuracy"] = "foo"
-    custom_metrics["auprc"] = tf.keras.metrics.AUC(name="auprc", curve="PR")
-    custom_metrics["brier_score"] = tf.keras.metrics.MeanSquaredError(name="brier_score")
 
     ntargets = len(TARGETS)
 
     for jj in range(ntargets):
- 
-        metrics.append(tf_metrics.AUC(name=f'auprc_index{jj}', curve='PR', index=jj))
-        metrics.append(tf_metrics.BrierScore(name=f'brier_score_index{jj}', index=jj))
+        # AUPRC
+        met_name = f'auprc_index{jj}'
+        met = tf_metrics.AUC(name=met_name, curve='PR', index=jj)
+        metrics.append(met)
+        custom_metrics[met_name] = met 
+
+        # Brier Score
+        met_name = f'brier_score_index{jj}'
+        met = tf_metrics.BrierScore(name=met_name, index=jj)
+        metrics.append(met)
+        custom_metrics[met_name] = met
 
         levs = np.arange(0.05,1,0.05)
 
-        for lev in levs:
+        for ii, lev in enumerate(levs):
             # CSI
             met_name = f'csi{str(int(lev*100)).zfill(2)}_index{jj}'
             met = tf_metrics.csi(use_soft_discretization=False,
@@ -160,10 +174,15 @@ def get_metrics():
             metrics.append(met)
             custom_metrics[met_name] = met
 
+            if ii == 0:
+               t0 = 0
+            else:
+               t0 = levs[ii-1]
+
             # Observed counts
             met_name = f"obsct{str(int(round(lev*100))).zfill(2)}_index{jj}"
             met = tf_metrics.ObsCt(
-                threshold1=lev-0.05, threshold2=lev, name=met_name, index=jj
+                threshold1=t0, threshold2=lev, name=met_name, index=jj
             )
             metrics.append(met)
             custom_metrics[met_name] = met
@@ -171,7 +190,7 @@ def get_metrics():
             # Forecast counts
             met_name = f"fcstct{str(int(round(lev*100))).zfill(2)}_index{jj}"
             met = tf_metrics.FcstCt(
-                threshold1=lev-0.05, threshold2=lev, name=met_name, index=jj
+                threshold1=t0, threshold2=lev, name=met_name, index=jj
             )
             metrics.append(met)
             custom_metrics[met_name] = met
@@ -276,7 +295,7 @@ if ngpu > 1:
     print("Number of devices: {}".format(strategy.num_replicas_in_sync))
     with strategy.scope():
         custom_objs, metrics = get_metrics()
-        conv_model = keras.models.load_model(model_file, custom_objects=custom_objs)
+        conv_model = keras.models.load_model(model_file, custom_objects=custom_objs, compile=False)
         # If true, then the mask is being used via sample_weight. We need to use weighted_metrics
         if mask:
             conv_model.compile(loss=config["loss_fcn"], weighted_metrics=metrics)
@@ -284,7 +303,7 @@ if ngpu > 1:
             conv_model.compile(loss=config["loss_fcn"], metrics=metrics)
 else:
     custom_objs, metrics = get_metrics()
-    conv_model = keras.models.load_model(model_file, custom_objects=custom_objs)
+    conv_model = keras.models.load_model(model_file, custom_objects=custom_objs, compile=False)
     # If true, then the mask is being used via sample_weight. We need to use weighted_metrics
     if mask:
         conv_model.compile(loss=config["loss_fcn"], weighted_metrics=metrics)
@@ -295,42 +314,62 @@ print(conv_model.summary())
 
 AUTOTUNE = tf.data.AUTOTUNE
 
-
-# Create the test dataset for running the permutation
-year = "2023"
-inroot = f"/raid/jcintineo/torcnn/tfrecs/{year}/"
-
-# leave these empty if you only want one run
-#month_subdirs = ['01-02','03','04','05','06','07','08','09','10','11-12']
-month_subdirs = ['05']
-
-#hour_subdirs = [str(i).zfill(2) for i in range(24)]
-hour_subdirs = []
-
-if len(month_subdirs) > 0:
-    val_lists = []
-    for sub in month_subdirs:
-        if sub == "01-02":
-            val_lists.append(f"{inroot}/{year}0[1-2]*/*tfrec")
-        elif sub == "11-12":
-            val_lists.append(f"{inroot}/{year}1[1-2]*/*tfrec")
-        else:
-            val_lists.append(f"{inroot}/{year}{sub}*/*tfrec")
-elif len(hour_subdirs) > 0:
-    val_lists = []
-    for sub in hour_subdirs:
-        val_lists.append(f"{inroot}/{year}*/*-{sub}*.tfrec")
+if filelist:
+    # this is a custom, ordered list of tfrecs
+    val_lists = [filelist]
 else:
-    val_lists = [f"{inroot}/{year}*/*tfrec"]  # this is your "one-run" case
+    # Create the test dataset for running the permutation
+    year = "2013"
+    inroot = f"/raid/jcintineo/torcnn/tfrecs/{year}/"
+    # subdirs: nontor, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
+    subglob = "pretor_15"
+    
+    # leave these empty if you only want one run
+    #month_subdirs = ['01-02','03','04','05','06','07','08','09','10','11-12']
+    month_subdirs = []
+    
+    #hour_subdirs = [str(i).zfill(2) for i in range(24)]
+    hour_subdirs = []
+    
+    if len(month_subdirs) > 0:
+        val_lists = []
+        for sub in month_subdirs:
+            if sub == "01-02":
+                val_lists.append(f"{inroot}/{year}0[1-2]*/{subglob}/*tfrec")
+            elif sub == "11-12":
+                val_lists.append(f"{inroot}/{year}1[1-2]*/{subglob}/*tfrec")
+            else:
+                val_lists.append(f"{inroot}/{year}{sub}*/{subglob}/*tfrec")
+    elif len(hour_subdirs) > 0:
+        val_lists = []
+        for sub in hour_subdirs:
+            val_lists.append(f"{inroot}/{year}*/{subglob}/*-{sub}*.tfrec")
+    else:
+        val_lists = [f"{inroot}/{year}*/{subglob}/*tfrec"]  # this is your "one-run" case
 
 
 for ii, val_list in enumerate(val_lists):
-    test_filenames = sorted(glob.glob(val_list))  # sort to ensure reproducibility
+    if filelist:
+        test_filenames = val_list
+    else:
+        test_filenames = sorted(glob.glob(val_list))  # sort to ensure reproducibility
     n_samples = len(test_filenames)
     print("\nNumber of samples:", n_samples, "\n")
 
+    try:
+        assert(n_samples > 0)
+    except AssertionError:
+        print(f'n_samples is {n_samples}')
+        sys.exit(1)
+
+    # one-off to combine pretor with nontor from 2023
+    #test_filenames += glob.glob(f"/raid/jcintineo/torcnn/tfrecs/2023/2023*/nontor/*tfrec")
+    #n_samples = len(test_filenames)
+    #print("\nNumber of samples:", n_samples, "\n") 
+
     # Create the TFRecordDataset
     test_ds = tf.data.TFRecordDataset(test_filenames, num_parallel_reads=AUTOTUNE)
+
     # Already handles the remainder since drop_remainder=False by default
     test_ds = (
         test_ds.map(parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
@@ -346,52 +385,44 @@ for ii, val_list in enumerate(val_lists):
     )
     test_ds = test_ds.with_options(options)
 
-    # for quick_looks (used for debugging)
-    #for inputs,labels,weights in test_ds:
-    #    preds = conv_model.predict(inputs)
-    #    #inp = inputs['input_0'].numpy()
-    #    #inp2 = inputs['input_1'].numpy()
-    #    labs = labels.numpy()
-    #    fig,(ax1,ax2,ax3) = plt.subplots(nrows=1,ncols=3)
-    #    ax1.imshow(labels[0,...,0])
-    #    ax1.grid()
-    #    ax2.imshow(weights[0,...,0])
-    #    ax2.grid()
-    #    preds = preds[0,...,0]
-    #    wts = weights[0,...,0]
-    #    preds[wts<=0] = 0
-    #    ax3.imshow(preds, vmin=0, vmax=1)
-    #    ax3.grid()
-    #    plt.show()
-    #    sys.exit()
-
-
-    # Perform eval
-    eval_results = conv_model.evaluate(test_ds)
-
-    cter = 0
-    dict_results = collections.OrderedDict(
-        {
-            "n_gpu": ngpu,
-            "batch_size": batchsize,
-            "n_samples": n_samples,
-            "n_duplicates": amt_to_add,
-            "val_lists": val_lists,
-        }
-    )
-
-    for key in custom_objs:
-        dict_results[key] = np.round(eval_results[cter], 5)
-        cter += 1
-
-    # Append outsubdir, if necessary
-    if month_subdirs:
-        final_outdir = f"{outdir}/month{month_subdirs[ii]}"
-    elif hour_subdirs:
-        final_outdir = f"{outdir}/hour{hour_subdirs[ii]}"
+    if filelist:
+        all_preds = np.array([])
+        all_labels = np.array([])
+        # for quick_looks (or used for debugging)
+        for inputs,labels in test_ds:
+            preds = conv_model.predict(inputs)
+            all_preds = np.concatenate((all_preds, np.squeeze(preds)))
+            all_labels =  np.concatenate((all_labels, np.squeeze(labels)))
+        os.makedirs(outdir, exist_ok=True)
+        np.save(f'{outdir}/predictions.npy', all_preds) 
+        np.save(f'{outdir}/labels.npy', all_labels)
+        print(len(all_preds), len(all_labels)) 
     else:
-        final_outdir = outdir
+        # Perform eval
+        eval_results = conv_model.evaluate(test_ds)
 
-    os.makedirs(final_outdir, exist_ok=True)
-    pickle.dump(dict_results, open(f"{final_outdir}/eval_results.pkl", "wb"))
-    print(f"Saved {final_outdir}/eval_results.pkl")
+        cter = 0
+        dict_results = collections.OrderedDict(
+            {
+                "n_gpu": ngpu,
+                "batch_size": batchsize,
+                "n_samples": n_samples,
+                "val_lists": val_lists,
+            }
+        )
+
+        for key in custom_objs:
+            dict_results[key] = np.round(eval_results[cter], 5)
+            cter += 1
+
+        # Append outsubdir, if necessary
+        if month_subdirs:
+            final_outdir = f"{outdir}/month{month_subdirs[ii]}"
+        elif hour_subdirs:
+            final_outdir = f"{outdir}/hour{hour_subdirs[ii]}"
+        else:
+            final_outdir = outdir
+
+        os.makedirs(final_outdir, exist_ok=True)
+        pickle.dump(dict_results, open(f"{final_outdir}/eval_results.pkl", "wb"))
+        print(f"Saved {final_outdir}/eval_results.pkl")

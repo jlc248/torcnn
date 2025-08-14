@@ -28,7 +28,7 @@ dataroot = '/work/thea.sandmael/radar/' #20230405/KJL/netcdf/Velocity/00.50/%Y%m
 # Improved hits
 ind = np.where((m1_labs == 1) & (m1_preds - m2_preds >= 0.5))
 os.makedirs(f'{evaldir}/hits/', exist_ok=True)
-for idx in hits_ind[0]:
+for idx in ind[0]:
 
     row = df.iloc[idx]
 

@@ -348,6 +348,7 @@ def plot_ppi(file_path,
  
         # Plot an X at the given location
         if Xlat is not None and Xlon is not None:
+            #ax.plot(calc_az_rad, calc_range, markersize=15, marker='o', markeredgewidth=3,  markerfacecolor='none', color='black')
             if oneplot: ax.plot(calc_az_rad, calc_range, markersize=15, marker='o', markeredgewidth=3,  markerfacecolor='none', color='black')
   
         # Add a colorbar

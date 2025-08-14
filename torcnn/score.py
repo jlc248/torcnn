@@ -5,12 +5,16 @@ import attributes_diagrams
 import pickle
 import os,sys
 import sklearn
+import pandas as pd
 
-indir='/raid/jcintineo/torcnn/torp_datasets/eval2023/no_spout/'
-outdir=indir
-
+# Use old-sklearn environment for TORPv1 scoring
+#indir='/raid/jcintineo/torcnn/eval/nospout_2023/torp/'
+indir='/raid/jcintineo/torcnn/eval/nospout_2023/test15/'
 preds = np.load(f'{indir}/predictions.npy')
 labels = np.load(f'{indir}/labels.npy')
+
+outdir=indir
+
 
 # Performance Diagram
 scores, axes = performance_diagrams.plot_performance_diagram(labels, preds, return_axes=True)

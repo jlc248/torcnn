@@ -6,7 +6,7 @@ import os
 
 # Use conda environment "old_sklearn"!
 
-outdir = '/raid/jcintineo/torcnn/torp_datasets/eval2023/no_spout/'
+outdir = '/raid/jcintineo/torcnn/eval/nospout_2023/torp/'
 os.makedirs(outdir, exist_ok=True)
 
 # Read the data from the CSV file
