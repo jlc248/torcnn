@@ -14,12 +14,37 @@ DataFrame of samples that is read for TORP predictions (see torp/predict.py).
 """
 
 
-df = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2023_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
-df = df[df.spout == 0]
+df1 = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2024_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
+df1 = df1[df1.spout == 0]
+ndf1 = len(df1)
+df1['preTornado'] = np.zeros(ndf1)
+df1['minPreTornado'] = np.full(ndf1, -1)
 
-outdir = '/raid/jcintineo/torcnn/eval/nospout_2023/'
-outpickle_name = f'{outdir}/torp_2023_nospout_cleaned.pkl'
+df2 = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2018_pretornadic_expanded_tilt0050_radar_r2500_nodup.csv')
+# Rename some columns to match df1
+df2.rename(columns={'longitudeAzShearMax': 'longitudeExtractCenter',
+                   'latitudeAzShearMax': 'latitudeExtractCenter',
+                   'rng_int': 'RangeInterval'}, inplace=True)
 
+common_cols = set(list(df1)) & set(list(df2))
+common_cols = list(common_cols)
+common_cols.sort()
+#for cc in common_cols:
+#    print(cc)
+#sys.exit()
+
+# Drop the columns in df1 and df2 that we don't want
+columns_to_drop_df1 = df1.columns.difference(common_cols)
+df1.drop(columns=columns_to_drop_df1, inplace=True)
+columns_to_drop_df2 = df2.columns.difference(common_cols)
+df2.drop(columns=columns_to_drop_df2, inplace=True)
+
+# Combine dfs
+df = pd.concat([df1, df2], ignore_index=True)
+
+outdir = '/raid/jcintineo/torcnn/eval/nontor2024_pretor2018/'
+outpickle_name = f'{outdir}/torp_nontor2024_pretor2018.pkl'
+os.makedirs(outdir, exist_ok=True)
 
 # Dropping some bad rows
 #mask_to_remove = ((df['radarTimestamp'] == '20230429-000013') & (df['radar'] == 'KEWX')) | ((df['radarTimestamp'] == '20230510-000009') & (df['radar'] == 'KDDC'))
@@ -36,11 +61,23 @@ indices_to_drop = []
 print('len(df):',len(df))
 
 for row in df.itertuples():
+ 
     if row.tornado:
         ttype = 'tor'
+        indices_to_drop.append(row.Index)
+        continue
     else:
-        ttype = 'nontor'
-    #neglecting spouts for now
+        # NB the tfrecs have tornado=1 for pretor cases, whereas the TORP csvs have tornado=0
+        if row.preTornado:
+            ceil_minPreTor = int(np.ceil(row.minPreTornado / 15) * 15)
+            if ceil_minPreTor == 0:
+                ceil_minPreTor = 15
+            elif ceil_minPreTor > 60:
+                ceil_minPreTor = 120
+            ttype = f'pretor_{ceil_minPreTor}'
+        else:
+            ttype = 'nontor'
+    # neglecting spouts for now
 
     expected_file = f'/raid/jcintineo/torcnn/tfrecs/{row.year}/{row.radarTimestamp[0:8]}/{ttype}/{row.radar}_{np.round(row.latitude,2)}_{np.round(row.longitude,2)}_{row.radarTimestamp}.tfrec'
 
@@ -55,7 +92,36 @@ print(len(tfrec_list))
 print(len(indices_to_drop)/len(tfrec_list))
 #sys.exit()
 df_new = df.drop(indices_to_drop)
-df_new.to_pickle(outpickle_name)
 
-pickle.dump(tfrec_list, open(f'{outdir}/colated_filelist.pkl', 'wb'))
-print(f'Saved {outdir}/colated_filelist.pkl')
+# Add new column 'tfrec'
+df_new['tfrec'] = tfrec_list
+df_new.to_pickle(outpickle_name)
+print(f'Saved {outpickle_name}')
+
+splice_leadtimes=False
+if splice_leadtimes:
+    print('saving spliced leadtime pkls and csvs')
+
+    subtype='15min'
+    os.makedirs(f'{outdir}/{subtype}', exist_ok=True)
+    df15 = df_new[((df_new.preTornado == 1) & (df_new.minPreTornado <= 15)) | (df_new.preTornado == 0)]
+    df15.to_pickle(f'{outdir}/{subtype}/{os.path.basename(outpickle_name).split(".pkl")[0]}-{subtype}.pkl')
+    df15.to_csv(f'{outdir}/{subtype}/{os.path.basename(outpickle_name).split(".pkl")[0]}-{subtype}.csv')
+    
+    subtype='30min'
+    os.makedirs(f'{outdir}/{subtype}', exist_ok=True)
+    df30 = df_new[((df_new.preTornado == 1) & (df_new.minPreTornado > 15) & (df_new.minPreTornado <= 30)) | (df_new.preTornado == 0)]
+    df30.to_pickle(f'{outdir}/{subtype}/{os.path.basename(outpickle_name).split(".pkl")[0]}-{subtype}.pkl')
+    df30.to_csv(f'{outdir}/{subtype}/{os.path.basename(outpickle_name).split(".pkl")[0]}-{subtype}.csv')
+
+    subtype='45min'
+    os.makedirs(f'{outdir}/{subtype}', exist_ok=True)
+    df45 = df_new[((df_new.preTornado == 1) & (df_new.minPreTornado > 30) & (df_new.minPreTornado <= 45)) | (df_new.preTornado == 0)]
+    df45.to_pickle(f'{outdir}/{subtype}/{os.path.basename(outpickle_name).split(".pkl")[0]}-{subtype}.pkl')
+    df45.to_csv(f'{outdir}/{subtype}/{os.path.basename(outpickle_name).split(".pkl")[0]}-{subtype}.csv')
+
+    subtype='60min'
+    os.makedirs(f'{outdir}/{subtype}', exist_ok=True)
+    df60 = df_new[((df_new.preTornado == 1) & (df_new.minPreTornado > 45) & (df_new.minPreTornado <= 60)) | (df_new.preTornado == 0)]
+    df60.to_pickle(f'{outdir}/{subtype}/{os.path.basename(outpickle_name).split(".pkl")[0]}-{subtype}.pkl')
+    df60.to_csv(f'{outdir}/{subtype}/{os.path.basename(outpickle_name).split(".pkl")[0]}-{subtype}.csv')

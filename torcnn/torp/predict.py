@@ -5,13 +5,14 @@ from sklearn.ensemble import RandomForestClassifier
 import os
 
 # Use conda environment "old_sklearn"!
+# Also, check labels below. Use 'preTornado == 1' if using pretornado dataset
 
-outdir = '/raid/jcintineo/torcnn/eval/nospout_2023/torp/'
+outdir = '/raid/jcintineo/torcnn/eval/nontor2024_pretor2018/60min/torp'
 os.makedirs(outdir, exist_ok=True)
 
 # Read the data from the CSV file
 #df = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2023_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
-df = pd.read_csv('/raid/jcintineo/torcnn/eval/nospout_2023/torp_2023_nospout_cleaned.csv')
+df = pd.read_csv(f"{os.path.dirname(outdir)}/torp_nontor2024_pretor2018-60min.csv")
 
 # Load the list of feature names from the pickle file
 with open('torp_features.pkl', 'rb') as f:
@@ -22,7 +23,11 @@ with open('/raid/jcintineo/torcnn/torp_datasets/NTDArandomForest_6047_falsealarm
     model = pickle.load(f)
 
 # Sub-sample, if necessary
-df = df[df.spout == 0]
+try:
+    df = df[df.spout == 0]
+except AttributeError as err:
+    print(str(err))
+    print('continuing...')
 
 # Select the feature columns from the DataFrame
 X = df[feature_names]
@@ -31,7 +36,8 @@ X = df[feature_names]
 predictions = model.predict_proba(X)
 np.save(f'{outdir}/predictions.npy', predictions[:,1])
 
-labels = np.array(df['tornado'])
+labels = ((df['tornado'] == 1) | (df['preTornado'] == 1)).astype(int)
+print('fraction of positive:', np.round(np.sum(labels)/len(labels),4))
 np.save(f'{outdir}/labels.npy', labels)
 
 # Add the predictions as a new column to the DataFrame

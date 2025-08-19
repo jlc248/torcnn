@@ -37,7 +37,7 @@ HISTOGRAM_Y_TICK_SPACING = 0.1
 FIGURE_WIDTH_INCHES = 4
 FIGURE_HEIGHT_INCHES = 4
 
-FONT_SIZE = 12 
+FONT_SIZE = 14 
 plt.rc("font", size=FONT_SIZE)
 plt.rc("axes", titlesize=FONT_SIZE)
 plt.rc("axes", labelsize=FONT_SIZE)

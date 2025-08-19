@@ -193,6 +193,7 @@ def cnn(config):
     num_conv_per_block = config['num_conv_per_block']
     nfmaps_by_block = config['nfmaps_by_block']
     coord_conv = config['coord_conv']
+    label_smoothing = config['label_smoothing']
 
     radar = conv = keras.Input(shape=input_tuples[0], name='radar')
     inputs = [radar]
@@ -270,6 +271,8 @@ def cnn(config):
                         hard_discretization_threshold=None,false_positive_weight=0.5,false_negative_weight=0.5)
     elif config['loss_fcn'] == 'iou':
         loss_fcn = losses.iou(use_as_loss_function=True, use_soft_discretization=False, hard_discretization_threshold=None)
+    elif config['loss_fcn'] == 'binary_crossentropy':
+        loss_fcn = keras.losses.BinaryCrossentropy(label_smoothing=label_smoothing)
 
     METRICS = get_metrics()
 

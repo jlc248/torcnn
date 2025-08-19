@@ -27,7 +27,8 @@ dataroot = '/work/thea.sandmael/radar/' #20230405/KJL/netcdf/Velocity/00.50/%Y%m
 
 # Improved hits
 ind = np.where((m1_labs == 1) & (m1_preds - m2_preds >= 0.5))
-os.makedirs(f'{evaldir}/hits/', exist_ok=True)
+subtype='better_hits'
+os.makedirs(f'{evaldir}/{subtype}/', exist_ok=True)
 for idx in ind[0]:
 
     row = df.iloc[idx]
@@ -36,8 +37,8 @@ for idx in ind[0]:
 
     fig, radar = rad_utils.plot_ppi(file_path,
                                     varname=varname,
-                                    Xlat=row.latitude,
-                                    Xlon=row.longitude,
+                                    Xlat=row.latitudeExtractCenter,
+                                    Xlon=row.longitudeExtractCenter,
                                     window_size=window_size,
                                     rangemax=300,
                                     plot_segment=True,
@@ -54,9 +55,9 @@ for idx in ind[0]:
             verticalalignment='top', horizontalalignment='left', bbox=props)
  
     if isinstance(varname, str):
-        figname = f'{evaldir}/hits/{radar}_{varname}_{os.path.basename(file_path).split(".")[0]}.png'
+        figname = f'{evaldir}/{subtype}/{radar}_{varname}_{os.path.basename(file_path).split(".")[0]}.png'
     else:
-        figname = f'{evaldir}/hits/{radar}_{len(varname)}panel_{os.path.basename(file_path).split(".")[0]}.png'
+        figname = f'{evaldir}/{subtype}/{radar}_{len(varname)}panel_{os.path.basename(file_path).split(".")[0]}.png'
     plt.savefig(figname, dpi=300, bbox_inches="tight")
     print(f'Saved {figname}')
     
@@ -66,7 +67,8 @@ print('')
 
 # Improved FAs
 ind = np.where((m1_labs == 0) & (m2_preds - m1_preds >= 0.8))
-os.makedirs(f'{evaldir}/FAs/', exist_ok=True)
+subtype='better_FAs'
+os.makedirs(f'{evaldir}/{subtype}/', exist_ok=True)
 for idx in ind[0]:
 
     row = df.iloc[idx]
@@ -93,9 +95,89 @@ for idx in ind[0]:
             verticalalignment='top', horizontalalignment='left', bbox=props)
 
     if isinstance(varname, str):
-        figname = f'{evaldir}/FAs/{radar}_{varname}_{os.path.basename(file_path).split(".")[0]}.png'
+        figname = f'{evaldir}/{subtype}/{radar}_{varname}_{os.path.basename(file_path).split(".")[0]}.png'
     else:
-        figname = f'{evaldir}/FAs/{radar}_{len(varname)}panel_{os.path.basename(file_path).split(".")[0]}.png'
+        figname = f'{evaldir}/{subtype}/{radar}_{len(varname)}panel_{os.path.basename(file_path).split(".")[0]}.png'
+    plt.savefig(figname, dpi=300, bbox_inches="tight")
+    print(f'Saved {figname}')
+
+    plt.close()
+
+print('')
+
+# Worse hits
+ind = np.where((m1_labs == 1) & (m2_preds - m1_preds >= 0.5))
+subtype='worse_hits'
+os.makedirs(f'{evaldir}/{subtype}/', exist_ok=True)
+for idx in ind[0]:
+
+    row = df.iloc[idx]
+
+    file_path = f'{dataroot}/{row.radarTimestamp[0:8]}/{row.radar}/netcdf/Velocity/00.50/{row.radarTimestamp}.netcdf'
+
+    fig, radar = rad_utils.plot_ppi(file_path,
+                                    varname=varname,
+                                    Xlat=row.latitudeExtractCenter,
+                                    Xlon=row.longitudeExtractCenter,
+                                    window_size=window_size,
+                                    rangemax=300,
+                                    plot_segment=True,
+    )
+
+    # annotate
+    textstr = f"{m1}: {int(m1_preds[idx]*100)}%\n{m2}: {int(m2_preds[idx]*100)}%\nTornado: {int(m1_labs[idx])}"
+
+    # Define properties for the text box background
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+
+    ax=plt.gca()
+    ax.text(0.8, 1.15, textstr, transform=ax.transAxes, fontsize=12,
+            verticalalignment='top', horizontalalignment='left', bbox=props)
+
+    if isinstance(varname, str):
+        figname = f'{evaldir}/{subtype}/{radar}_{varname}_{os.path.basename(file_path).split(".")[0]}.png'
+    else:
+        figname = f'{evaldir}/{subtype}/{radar}_{len(varname)}panel_{os.path.basename(file_path).split(".")[0]}.png'
+    plt.savefig(figname, dpi=300, bbox_inches="tight")
+    print(f'Saved {figname}')
+
+    plt.close()
+
+print('')
+
+# Worse FAs
+ind = np.where((m1_labs == 0) & (m1_preds - m2_preds >= 0.3))
+subtype='worse_FAs'
+os.makedirs(f'{evaldir}/{subtype}/', exist_ok=True)
+for idx in ind[0]:
+
+    row = df.iloc[idx]
+
+    file_path = f'{dataroot}/{row.radarTimestamp[0:8]}/{row.radar}/netcdf/Velocity/00.50/{row.radarTimestamp}.netcdf'
+
+    fig, radar = rad_utils.plot_ppi(file_path,
+                                    varname=varname,
+                                    Xlat=row.latitude,
+                                    Xlon=row.longitude,
+                                    window_size=window_size,
+                                    rangemax=300,
+                                    plot_segment=True,
+    )
+
+    # annotate
+    textstr = f"{m1}: {int(m1_preds[idx]*100)}%\n{m2}: {int(m2_preds[idx]*100)}%\nTornado: {int(m1_labs[idx])}"
+
+    # Define properties for the text box background
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+
+    ax=plt.gca()
+    ax.text(0.8, 1.15, textstr, transform=ax.transAxes, fontsize=12,
+            verticalalignment='top', horizontalalignment='left', bbox=props)
+
+    if isinstance(varname, str):
+        figname = f'{evaldir}/{subtype}/{radar}_{varname}_{os.path.basename(file_path).split(".")[0]}.png'
+    else:
+        figname = f'{evaldir}/{subtype}/{radar}_{len(varname)}panel_{os.path.basename(file_path).split(".")[0]}.png'
     plt.savefig(figname, dpi=300, bbox_inches="tight")
     print(f'Saved {figname}')
 

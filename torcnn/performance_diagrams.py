@@ -595,7 +595,7 @@ def perf_diagram_pod_far(pod, far, outfilename, labs = [0,10,20,30,40,50,60,70,8
 
     assert len(labs) == len(pod) == len(far)
  
-    FONT_SIZE = 8 
+    FONT_SIZE = 12
     plt.rc('font', size=FONT_SIZE)
     plt.rc('axes', titlesize=FONT_SIZE)
     plt.rc('axes', labelsize=FONT_SIZE)
@@ -684,7 +684,7 @@ def perf_diagram_pod_far(pod, far, outfilename, labs = [0,10,20,30,40,50,60,70,8
         #else:
         #  xcor = 0.02; ycor = 0.0075
         #axes_object.annotate(labs2[i], xy=(xs[i]-xcor, ys[i]-ycor), color='white', fontsize=10)
-        axes_object.annotate(labs2[i], xy=(xs[i]-0.04,ys[i]), color='black', fontsize=8)
+        axes_object.annotate(labs2[i], xy=(xs[i]-0.04,ys[i]), color='black', fontsize=10)
   
   
     success_ratio = 1 - far
@@ -705,7 +705,7 @@ def perf_diagram_pod_far(pod, far, outfilename, labs = [0,10,20,30,40,50,60,70,8
       #else:
       #  xcor = 0.02; ycor = 0.0075
       #axes_object.annotate(labs[i], xy=(xs[i]-xcor, ys[i]-ycor), color='white', fontsize=10)
-      axes_object.annotate(labs[i], xy=(xs[i]+0.02,ys[i]), color='black', fontsize=8)  
+      axes_object.annotate(labs[i], xy=(xs[i]+0.02,ys[i]), color='black', fontsize=10)  
 
 
     axes_object.set_xlabel('Success ratio (1 - FAR)',fontsize=FONT_SIZE)

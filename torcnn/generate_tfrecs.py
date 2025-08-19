@@ -258,6 +258,20 @@ def collect_and_write_tfrec(row,
         info['preTornadoTracked'] = row['preTornadoTracked']                            # was this stormID tracked pre-tornado?
         info['overallWarningLeadTime'] = row['overallWarningLeadTime']
         info['pointWarningLeadTime'] = row['pointWarningLeadTime']
+
+        if row['closestTorPointsInTime'] != '-99900':
+            parts = row['closestTorPointsInTime'].split(';;')
+            for pp in parts:
+                ss, tt = pp.split(':')
+                if float(ss) <= 100 and float(tt) <= 60:
+                    return
+        if row['closestTorPointsInSpace'] != '-99900':
+            parts = row['closestTorPointsInSpace'].split(';;')
+            for pp in parts:
+                ss, tt = pp.split(':')
+                if float(ss) <= 100 and float(tt) <= 60:
+                    return
+
         info['magnitude'] = -1 if row['magnitude'] == 'U' else float(row['magnitude'])
         if row['spout']:
             label = 'spout'
@@ -272,7 +286,7 @@ def collect_and_write_tfrec(row,
         info['rangeExtractCenter'] = row['rangeAzShearMax']
         info['distToExtractCenter'] = row['distToAzShearMax']
         info['minPreTornado'] = row['minPreTornado']
-        info['tornado'] = 1
+        info['tornado'] = 1 # NB the TORP csvs say tornado=0 for each pretor sample
         ceil_minPreTor = int(np.ceil(row['minPreTornado'] / 15) * 15)
         if ceil_minPreTor == 0:
             ceil_minPreTor = 15
@@ -378,12 +392,12 @@ if __name__ == "__main__":
 
     # Drive the parallel processing
     
-    dataset_type = 'pretornadic' # 'Storm_Reports' or 'pretornadic'
+    dataset_type = 'Storm_Reports' # 'Storm_Reports' or 'pretornadic'
     
     # Load torp dataset
     dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/',
-                          years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018],
-                          #years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
+                          #years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018],
+                          years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
                           dataset_type=dataset_type
     )
     ds = dataset.load_dataframe()
@@ -400,11 +414,11 @@ if __name__ == "__main__":
     
     
     # 2011-2018
-    datapatt1 = '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+    datapatt1 = '/myrorss2/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
     # 2019-2024
-    datapatt2 = '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+    datapatt2 = '/myrorss2/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
     
-    outpatt = f'/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
+    outpatt = f'/raid/jcintineo/torcnn/tfrecs_100km1hr/%Y/%Y%m%d/'
     
     hs = halfsize = (64, 128)
     
@@ -440,7 +454,7 @@ if __name__ == "__main__":
     
     number_of_rows = len(ds)
     
-    max_workers = 20 #min(gfs_columns_extract_workers, os.cpu_count())
+    max_workers = 40 #min(gfs_columns_extract_workers, os.cpu_count())
     
     with tqdm(total=number_of_rows) as pbar: # progress bar
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:

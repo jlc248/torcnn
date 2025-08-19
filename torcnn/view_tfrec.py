@@ -23,7 +23,7 @@ def decode_and_visualize_tfrecord(
     image_keys=['Reflectivity', 'Velocity', 'RhoHV', 'AzShear'],
     all_2d_keys=['Reflectivity', 'Velocity', 'RhoHV', 'AzShear', 'DivShear',
                  'Zdr', 'PhiDP', 'SpectrumWidth'],
-    image_shape=(192, 192, 1),  # You'll need to know the original shape of your 2D arrays
+    image_shape=(128, 256, 1),  # You'll need to know the original shape of your 2D arrays
     image_dtype=tf.float32,  # Or tf.uint8, tf.int32, etc., depending on what you stored
     num_records_to_process=1 # How many records to decode and visualize from the TFRecord
 ):
@@ -189,5 +189,7 @@ def decode_and_visualize_tfrecord(
 #tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200521/tor/KGLD_37.92_-102.31_20200521-215207.tfrec'
 #tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200522/tor/KGSP_35.1_-81.5_20200522-192612.tfrec'
 #tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200523/tor/KDVN_41.78_-91.4_20200523-173539.tfrec' # "upside down" cell?
-tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200607/tor/KABR_44.91_-99.45_20200607-231744.tfrec' # some space-time displacement
+#tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200607/tor/KABR_44.91_-99.45_20200607-231744.tfrec' # some space-time displacement
+#tfrec='/raid/jcintineo/torcnn/tfrecs/2023/20230331/nontor/KNQA_35.45_-90.16_20230331-223445.tfrec'
+tfrec='/raid/jcintineo/torcnn/tfrecs/2023/20230331/nontor/KNQA_35.7_-89.98_20230331-223445.tfrec'
 decode_and_visualize_tfrecord(tfrec, image_dtype=np.uint8)

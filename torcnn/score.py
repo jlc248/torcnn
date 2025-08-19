@@ -9,7 +9,7 @@ import pandas as pd
 
 # Use old-sklearn environment for TORPv1 scoring
 #indir='/raid/jcintineo/torcnn/eval/nospout_2023/torp/'
-indir='/raid/jcintineo/torcnn/eval/nospout_2023/test15/'
+indir='/raid/jcintineo/torcnn/eval/nontor2024_pretor2018/60min/torp/'
 preds = np.load(f'{indir}/predictions.npy')
 labels = np.load(f'{indir}/labels.npy')
 

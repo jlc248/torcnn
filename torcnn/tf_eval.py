@@ -12,7 +12,7 @@ import time
 import pickle
 import matplotlib.pyplot as plt
 import collections
-
+import pandas as pd
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "-i",
@@ -34,7 +34,7 @@ parser.add_argument(
 parser.add_argument(
     "-f",
     "--filelist",
-    help="Use this list of files for colated predictions with TORP.",
+    help="Get a list of files from this pandas DataFrame for colated predictions with TORP.",
     type=str,
     default=[],
 )
@@ -68,7 +68,8 @@ model_file = args.model if (args.model) else f"{indir}/fit_conv_model.keras"
 outdir = args.outdir if (args.outdir) else os.path.join(indir, "TEST")
 
 if args.filelist:
-    filelist = pickle.load(open(args.filelist, 'rb'))
+    tmpDF = pd.read_pickle(args.filelist)
+    filelist = list(tmpDF.tfrec)
 else:
     filelist = []
 
