@@ -9,13 +9,18 @@ import pickle
 #2023-05-10 00:00:09 is too far from 2023-05-10 00:23:48. KDDC - Reflectivity
 
 """
-This script will create a colated list of tfrecs and corresponding 
-DataFrame of samples that is read for TORP predictions (see torp/predict.py).
+This script will create a colated DataFrame including tfrecs and corresponding 
+samples that is read for TORP predictions (see torp/predict.py).
 """
 
 
-df1 = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2024_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
+df1 = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2023_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
+#tmp = df1[(df1.radar == 'KMRX') & (df1.radarTimestamp == '20230807-174942')]
+#print(tmp.tornadoesWithin100kmAnd2hr)
+#sys.exit()
+# Removing spouts
 df1 = df1[df1.spout == 0]
+
 ndf1 = len(df1)
 df1['preTornado'] = np.zeros(ndf1)
 df1['minPreTornado'] = np.full(ndf1, -1)
@@ -42,8 +47,8 @@ df2.drop(columns=columns_to_drop_df2, inplace=True)
 # Combine dfs
 df = pd.concat([df1, df2], ignore_index=True)
 
-outdir = '/raid/jcintineo/torcnn/eval/nontor2024_pretor2018/'
-outpickle_name = f'{outdir}/torp_nontor2024_pretor2018.pkl'
+outdir = '/raid/jcintineo/torcnn/eval/nospout2023_pretor2018/'
+outpickle_name = f'{outdir}/torp_nospout2023_pretor2018.pkl'
 os.makedirs(outdir, exist_ok=True)
 
 # Dropping some bad rows
@@ -79,7 +84,7 @@ for row in df.itertuples():
             ttype = 'nontor'
     # neglecting spouts for now
 
-    expected_file = f'/raid/jcintineo/torcnn/tfrecs/{row.year}/{row.radarTimestamp[0:8]}/{ttype}/{row.radar}_{np.round(row.latitude,2)}_{np.round(row.longitude,2)}_{row.radarTimestamp}.tfrec'
+    expected_file = f'/raid/jcintineo/torcnn/tfrecs_100km1hr/{row.year}/{row.radarTimestamp[0:8]}/{ttype}/{row.radar}_{np.round(row.latitude,2)}_{np.round(row.longitude,2)}_{row.radarTimestamp}.tfrec'
 
     if os.path.isfile(expected_file):
         tfrec_list.append(expected_file)
@@ -87,9 +92,9 @@ for row in df.itertuples():
        indices_to_drop.append(row.Index)
        print(f'{expected_file} does not exist.')
 
-print(len(indices_to_drop))
-print(len(tfrec_list))
-print(len(indices_to_drop)/len(tfrec_list))
+print('number of indices_to_drop:', len(indices_to_drop))
+print('number of tfrecs:', len(tfrec_list))
+print('dropped ratio:',len(indices_to_drop)/len(df))
 #sys.exit()
 df_new = df.drop(indices_to_drop)
 
@@ -97,8 +102,10 @@ df_new = df.drop(indices_to_drop)
 df_new['tfrec'] = tfrec_list
 df_new.to_pickle(outpickle_name)
 print(f'Saved {outpickle_name}')
+df_new.to_csv(f"{outpickle_name.split('.pkl')[0]}.csv")
+print(f'Saved {outpickle_name.split(".pkl")[0]}.csv')
 
-splice_leadtimes=False
+splice_leadtimes=True
 if splice_leadtimes:
     print('saving spliced leadtime pkls and csvs')
 
