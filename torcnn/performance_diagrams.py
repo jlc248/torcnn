@@ -374,10 +374,10 @@ def _get_points_in_perf_diagram(observed_labels, forecast_probabilities, nboots=
             pass
         # print(k,time.time() - t0)
 
-    pod_by_threshold = np.array([1.0] + pod_by_threshold.tolist() + [0.0])
-    success_ratio_by_threshold = np.array(
-        [0.0] + success_ratio_by_threshold.tolist() + [1.0]
-    )
+    #pod_by_threshold = np.array([1.0] + pod_by_threshold.tolist() + [0.0])
+    #success_ratio_by_threshold = np.array(
+    #    [0.0] + success_ratio_by_threshold.tolist() + [1.0]
+    #)
 
     if nboots > 0:
         sr95 = np.array([0.0] + sr95.tolist() + [1.0])

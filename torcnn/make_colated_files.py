@@ -14,42 +14,52 @@ samples that is read for TORP predictions (see torp/predict.py).
 """
 
 
-df1 = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2023_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
-#tmp = df1[(df1.radar == 'KMRX') & (df1.radarTimestamp == '20230807-174942')]
-#print(tmp.tornadoesWithin100kmAnd2hr)
-#sys.exit()
+df1 = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2024_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
+
+outdir = '/raid/jcintineo/torcnn/eval/nontor2024_pretor2013/'
+outpickle_name = f'{outdir}/torp_nontor2024_pretor2013.pkl'
+os.makedirs(outdir, exist_ok=True)
+
+# If using pretornado, make 15-min, 30-min, 45-min, and 60-min dataframes and csvs.
+splice_leadtimes=True
+
+# If you want to drop tors and only use nontor (and maybe append to pretornado)
+dropTor=True
+
 # Removing spouts
 df1 = df1[df1.spout == 0]
 
-ndf1 = len(df1)
-df1['preTornado'] = np.zeros(ndf1)
-df1['minPreTornado'] = np.full(ndf1, -1)
+# Combine with pretornado dataset?
+if True:
+    ndf1 = len(df1)
+    df1['preTornado'] = np.zeros(ndf1)
+    df1['minPreTornado'] = np.full(ndf1, -1)
+    
+    df2 = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2013_pretornadic_expanded_tilt0050_radar_r2500_nodup.csv')
+    # Rename some columns to match df1
+    df2.rename(columns={'longitudeAzShearMax': 'longitudeExtractCenter',
+                       'latitudeAzShearMax': 'latitudeExtractCenter',
+                       'rng_int': 'RangeInterval'}, inplace=True)
+    
+    common_cols = set(list(df1)) & set(list(df2))
+    common_cols = list(common_cols)
+    common_cols.sort()
+    #for cc in common_cols:
+    #    print(cc)
+    #sys.exit()
+    
+    # Drop the columns in df1 and df2 that we don't want
+    columns_to_drop_df1 = df1.columns.difference(common_cols)
+    df1.drop(columns=columns_to_drop_df1, inplace=True)
+    columns_to_drop_df2 = df2.columns.difference(common_cols)
+    df2.drop(columns=columns_to_drop_df2, inplace=True)
+    
+    # Combine dfs
+    df = pd.concat([df1, df2], ignore_index=True)
+else:
+    df = df1.copy() 
 
-df2 = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2018_pretornadic_expanded_tilt0050_radar_r2500_nodup.csv')
-# Rename some columns to match df1
-df2.rename(columns={'longitudeAzShearMax': 'longitudeExtractCenter',
-                   'latitudeAzShearMax': 'latitudeExtractCenter',
-                   'rng_int': 'RangeInterval'}, inplace=True)
-
-common_cols = set(list(df1)) & set(list(df2))
-common_cols = list(common_cols)
-common_cols.sort()
-#for cc in common_cols:
-#    print(cc)
-#sys.exit()
-
-# Drop the columns in df1 and df2 that we don't want
-columns_to_drop_df1 = df1.columns.difference(common_cols)
-df1.drop(columns=columns_to_drop_df1, inplace=True)
-columns_to_drop_df2 = df2.columns.difference(common_cols)
-df2.drop(columns=columns_to_drop_df2, inplace=True)
-
-# Combine dfs
-df = pd.concat([df1, df2], ignore_index=True)
-
-outdir = '/raid/jcintineo/torcnn/eval/nospout2023_pretor2018/'
-outpickle_name = f'{outdir}/torp_nospout2023_pretor2018.pkl'
-os.makedirs(outdir, exist_ok=True)
+cols = list(df)
 
 # Dropping some bad rows
 #mask_to_remove = ((df['radarTimestamp'] == '20230429-000013') & (df['radar'] == 'KEWX')) | ((df['radarTimestamp'] == '20230510-000009') & (df['radar'] == 'KDDC'))
@@ -58,7 +68,6 @@ os.makedirs(outdir, exist_ok=True)
 #indices_to_remove = df.index[mask_to_remove].tolist()
 #print(indices_to_remove)
 #sys.exit()
-
     
 tfrec_list = []
 indices_to_drop = []
@@ -69,20 +78,23 @@ for row in df.itertuples():
  
     if row.tornado:
         ttype = 'tor'
-        indices_to_drop.append(row.Index)
-        continue
+        if dropTor:
+            indices_to_drop.append(row.Index)
+            continue
     else:
-        # NB the tfrecs have tornado=1 for pretor cases, whereas the TORP csvs have tornado=0
-        if row.preTornado:
-            ceil_minPreTor = int(np.ceil(row.minPreTornado / 15) * 15)
-            if ceil_minPreTor == 0:
-                ceil_minPreTor = 15
-            elif ceil_minPreTor > 60:
-                ceil_minPreTor = 120
-            ttype = f'pretor_{ceil_minPreTor}'
+        if 'preTornado' in cols:
+            # NB the tfrecs have tornado=1 for pretor cases, whereas the TORP csvs have tornado=0
+            if row.preTornado:
+                ceil_minPreTor = int(np.ceil(row.minPreTornado / 15) * 15)
+                if ceil_minPreTor == 0:
+                    ceil_minPreTor = 15
+                elif ceil_minPreTor > 60:
+                    ceil_minPreTor = 120
+                ttype = f'pretor_{ceil_minPreTor}'
+            else:
+                ttype = 'nontor'
         else:
-            ttype = 'nontor'
-    # neglecting spouts for now
+            ttype = 'nontor'        
 
     expected_file = f'/raid/jcintineo/torcnn/tfrecs_100km1hr/{row.year}/{row.radarTimestamp[0:8]}/{ttype}/{row.radar}_{np.round(row.latitude,2)}_{np.round(row.longitude,2)}_{row.radarTimestamp}.tfrec'
 
@@ -98,6 +110,7 @@ print('dropped ratio:',len(indices_to_drop)/len(df))
 #sys.exit()
 df_new = df.drop(indices_to_drop)
 
+
 # Add new column 'tfrec'
 df_new['tfrec'] = tfrec_list
 df_new.to_pickle(outpickle_name)
@@ -105,7 +118,7 @@ print(f'Saved {outpickle_name}')
 df_new.to_csv(f"{outpickle_name.split('.pkl')[0]}.csv")
 print(f'Saved {outpickle_name.split(".pkl")[0]}.csv')
 
-splice_leadtimes=True
+
 if splice_leadtimes:
     print('saving spliced leadtime pkls and csvs')
 

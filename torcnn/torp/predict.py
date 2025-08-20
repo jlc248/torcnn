@@ -7,12 +7,12 @@ import os
 # Use conda environment "old_sklearn"!
 # Also, check labels below. Use 'preTornado == 1' if using pretornado dataset
 
-outdir = '/raid/jcintineo/torcnn/eval/nontor2024_pretor2018/60min/torp'
+outdir = '/raid/jcintineo/torcnn/eval/nontor2024_pretor2013/60min/torp'
 os.makedirs(outdir, exist_ok=True)
 
 # Read the data from the CSV file
 #df = pd.read_csv('/raid/jcintineo/torcnn/torp_datasets/2023_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
-df = pd.read_csv(f"{os.path.dirname(outdir)}/torp_nontor2024_pretor2018-60min.csv")
+df = pd.read_csv(f"{os.path.dirname(outdir)}/torp_nontor2024_pretor2013-60min.csv")
 
 # Load the list of feature names from the pickle file
 with open('torp_features.pkl', 'rb') as f:
@@ -36,7 +36,11 @@ X = df[feature_names]
 predictions = model.predict_proba(X)
 np.save(f'{outdir}/predictions.npy', predictions[:,1])
 
-labels = ((df['tornado'] == 1) | (df['preTornado'] == 1)).astype(int)
+try:
+    labels = ((df['tornado'] == 1) | (df['preTornado'] == 1)).astype(int)
+except KeyError:
+    labels = (df['tornado'] == 1).astype(int)
+
 print('fraction of positive:', np.round(np.sum(labels)/len(labels),4))
 np.save(f'{outdir}/labels.npy', labels)
 
