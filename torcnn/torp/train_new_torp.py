@@ -1,8 +1,11 @@
 import argparse
+import numpy as np
 import pandas as pd
 import joblib
-import os
+import os, sys
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
 from torp_dataset import TORPDataset
 import pickle
 import io
@@ -32,11 +35,11 @@ def check_conditions(s):
             dist_str, time_str = p.split(':')
             
             # Convert to numeric types for comparison
-            time = float(time_str)
-            dist = int(dist_str)
+            dist = float(dist_str)
+            time = int(time_str)
             
             # Check if both conditions are met
-            if time <= 100.0 and count <= 60:
+            if dist <= 100.0 and time <= 60:
                 return True
         except (ValueError, IndexError):
             # This handles cases of malformed strings gracefully
@@ -97,20 +100,31 @@ def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
         return
 
     # hard-code torp predictors
-    predictor_names = pickle.load(open('torp_predictors.pkl','rb'))
+    predictor_names = pickle.load(open('torp_features.pkl','rb'))
 
     # get only storms within 100km and 1hr here?
 
     # Parse out the data we want
-    val = ds[ds.year == 2023]
-    y_val = val.drop(columns=[target_column])
-    columns_to_drop = [col for col in ds.columns if col not in predictor_names]
-    X_val = val.drop(columns=columns_to_drop)
+    train = ds[ds.year < 2024].copy()
+    val = ds[ds.year == 2024].copy()
 
-    train = ds[ds.year < 2023]
-    y_train = train.drop(columns=[target_column])
-    X_train = train.drop(columns=columns_to_drop)
+    y_train = train[target_column]
+    y_val = val[target_column]
+ 
+    # Select only the specified predictor columns
+    X_train = train[predictor_names]
+    X_val = val[predictor_names]
 
+    print(f'\nN training samples: {len(X_train)}')
+    print(f'train percent pos: {np.round(np.sum(y_train)/len(y_train), 2) * 100}%\n\n')
+    print(f'N validation samples: {len(X_val)}')
+    print(f'val percent pos: {np.round(np.sum(y_val)/len(y_val), 2) * 100}%\n\n')
+    val_percentage = np.round(len(y_val)/(len(y_val) + len(y_train)),3) * 100
+    train_percentage = 100 - val_percentage
+    print(f'percent val / train: {val_percentage}% / {train_percentage}%\n\n')
+
+    # Define imputer
+    imputer = SimpleImputer(strategy='mean')
 
     # Define the Random Forest Classifier with the specified parameters
     rf_classifier = RandomForestClassifier(
@@ -131,21 +145,49 @@ def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
         n_jobs=n_jobs  # Use the specified number of jobs
     )
 
+    # Create the pipeline
+    pipeline = Pipeline(steps=[
+        ('imputer', imputer),
+        ('classifier', rf_classifier)
+    ])
+
     # Train the classifier
     print(f"Training the Random Forest Classifier using {n_jobs} cores...")
-    rf_classifier.fit(X_train, y_train)
+    pipeline.fit(X_train, y_train)
     print("Training complete.")
+
+    # --- Start of the new validation code ---
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, precision_recall_curve, auc
+
+    print("\nEvaluating model performance on the validation set...")
+    
+    # Use the trained pipeline to make predictions on the validation set
+    y_pred_val = pipeline.predict(X_val)
+    y_pred_proba_val = pipeline.predict_proba(X_val)[:, 1] # Get probabilities for ROC AUC
+
+    # Calculate and print performance metrics
+    val_accuracy = accuracy_score(y_val, y_pred_val)
+    val_precision, val_recall, _ = precision_recall_curve(y_val, y_pred_proba_val)
+    val_aucpr = auc(val_recall, val_precision)
+    val_f1 = f1_score(y_val, y_pred_val)
+
+    print(f"Validation Accuracy: {val_accuracy:.4f}")
+    print(f"Validation AUCPR: {val_aucpr:.4f}")
+    print(f"Validation F1-Score: {val_f1:.4f}")
+
 
     # Create the output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
     # Define the full path to save the model
-    model_filename = "random_forest_model.joblib"
+    model_filename = "random_forest_pipeline.joblib"
     model_path = os.path.join(output_dir, model_filename)
 
-    # Save the trained model using joblib
-    joblib.dump(rf_classifier, model_path)
-    print(f"Model successfully saved to '{model_path}'")
+    # Save the trained pipeline using joblib
+    # The pipeline object contains both the imputer (with learned means) and the classifier.
+    joblib.dump(pipeline, model_path)
+    print(f"Pipeline successfully saved to '{model_path}'")
+
 
 def main():
     """
@@ -153,12 +195,14 @@ def main():
     """
     parser = argparse.ArgumentParser(description="Train a Random Forest Classifier and save the model.")
     parser.add_argument(
+        "-o",
         "--output_dir",
         type=str,
         default="./models",
         help="The directory to save the trained model. Defaults to './models'."
     )
     parser.add_argument(
+        "-n",
         "--n_jobs",
         type=int,
         default=-1,
@@ -169,15 +213,15 @@ def main():
 
     # Define the input file and target column
     dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/',
-                          years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023],
+                          years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
                           dataset_type='Storm_Reports',
     )
-    ds = dataset.load_dataframe()
+    ds_orig = dataset.load_dataframe()
     
     target = "tornado"
 
     # Run the training pipeline 
-    train_and_save_model(ds, target, args.output_dir, args.n_jobs)
+    train_and_save_model(ds_orig, target, args.output_dir, args.n_jobs)
 
 if __name__ == "__main__":
     main()

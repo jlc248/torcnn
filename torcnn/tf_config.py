@@ -20,18 +20,18 @@ def tf_config():
         batchsize = max([ngpu,1]) * 256
         targets = ['tornado']
   
-        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs"
+        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs_100km1hr"
         # N.B. Can't have any "//" in the train_list or val_list!!!
         # subdirs: nontor, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
-        train_list = [f"{tfrec_dir}/201[1-9]/2*/[n,t]*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/[n,t]*/*tfrec", f"{tfrec_dir}/201[1-6]/2*/pretor*/*tfrec"]
-        val_list = [f"{tfrec_dir}/2023/2*/[n,t]*/*.tfrec", f"{tfrec_dir}/2017/2*/pretor*/*tfrec"]
+        train_list = [f"{tfrec_dir}/201[1-9]/2*/[n,t]*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/[n,t]*/*tfrec",] # f"{tfrec_dir}/201[1-6]/2*/pretor*/*tfrec"]
+        val_list = [f"{tfrec_dir}/2023/2*/[n,t]*/*.tfrec",] #f"{tfrec_dir}/2017/2*/pretor*/*tfrec"]
 
         outprefix = '/raid/jcintineo/torcnn/tests/2011-23/'
-        outdir = f'{outprefix}/test20'
+        outdir = f'{outprefix}/test25'
   
         # Inputs
         # 'Reflectivity', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear', 'RhoHV', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range', 'range_inv'
-        inputs.append(['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask', 'range'])
+        inputs.append(['Reflectivity', 'Velocity', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range'])
         #inputs.append(['range','range_inv']) # we need coords for coordconv
         scalar_vars = []
   
@@ -42,7 +42,9 @@ def tf_config():
      
         # Use coordinate convolution?
         coord_conv = False 
-  
+ 
+        label_smoothing = 0.1
+ 
         loss_fcn = 'binary_crossentropy' #tversky_coeff binary_crossentropy csi iou
         learning_rate = 0.01
         sample_weights = {} #{'dbz_thresh':30, 'clear_wt':0.25, 'precip_wt':1, 'pos_class_wt':10} #leave empty if you don't want sample weights
@@ -115,8 +117,9 @@ def tf_config():
            'loss_fcn':loss_fcn,
            'optimizer':'AdamW', # AdamW, Adam, SGD, adabelief
            'outdir':outdir,
-           'pool':'max'
-           }
+           'pool':'max',
+           'label_smoothing': label_smoothing,
+    }
   
 if __name__ == "__main__":
     outdir = sys.argv[1]

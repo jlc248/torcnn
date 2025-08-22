@@ -13,6 +13,9 @@ minPreTornado[minPreTornado > 60] = 60
 
 hist_vals, bin_edges, patches = plt.hist(minPreTornado, bins=20, color='#b3ffb3', edgecolor='#595959')
 
+for v in [15, 30, 45]:
+    plt.axvline(x=v, color="#202b6b", linewidth=3)
+
 plt.title('Minutes Pre-tornado')
 plt.xlabel('Minutes')
 plt.ylabel('Count')
