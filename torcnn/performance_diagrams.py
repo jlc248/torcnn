@@ -664,7 +664,7 @@ def perf_diagram_pod_far(pod, far, outfilename, labs = [0,10,20,30,40,50,60,70,8
       #labs, xs, and ys need to be same len
       assert(len(labs3) == len(xs) == len(ys))
       for i in range(0,len(labs3)):
-        axes_object.annotate(labs3[i], xy=(xs[i]-0.04,ys[i]), color='black', fontsize=8)
+        axes_object.annotate(labs3[i], xy=(xs[i]-0.04,ys[i]), color='black', fontsize=10)
  
     if(pod2 is not None): # then  plot secondary line
       pod2 = np.array(pod2); far2 = np.array(far2)
@@ -679,11 +679,6 @@ def perf_diagram_pod_far(pod, far, outfilename, labs = [0,10,20,30,40,50,60,70,8
       #labs, xs, and ys need to be same len
       assert(len(labs2) == len(xs) == len(ys))
       for i in range(0,len(labs2)):
-        #if(int(labs[i])<10):
-        #  xcor = 0.01; ycor = 0.0075
-        #else:
-        #  xcor = 0.02; ycor = 0.0075
-        #axes_object.annotate(labs2[i], xy=(xs[i]-xcor, ys[i]-ycor), color='white', fontsize=10)
         axes_object.annotate(labs2[i], xy=(xs[i]-0.04,ys[i]), color='black', fontsize=10)
   
   
@@ -700,11 +695,6 @@ def perf_diagram_pod_far(pod, far, outfilename, labs = [0,10,20,30,40,50,60,70,8
     #labs, xs, and ys need to be same len
     assert(len(labs) == len(xs) == len(ys))
     for i in range(0,len(labs)): 
-      #if(int(labs[i])<10):
-      #  xcor = 0.01; ycor = 0.0075
-      #else:
-      #  xcor = 0.02; ycor = 0.0075
-      #axes_object.annotate(labs[i], xy=(xs[i]-xcor, ys[i]-ycor), color='white', fontsize=10)
       axes_object.annotate(labs[i], xy=(xs[i]+0.02,ys[i]), color='black', fontsize=10)  
 
 
@@ -716,7 +706,7 @@ def perf_diagram_pod_far(pod, far, outfilename, labs = [0,10,20,30,40,50,60,70,8
     axes_object.set_ylim(0., 1.)
   
     if pod2 is not None and pod3 is not None:
-        leg = axes_object.legend([csi1Line,csi2Line,csi3Line], legend_labs,loc='upper right',fontsize=16)
+        leg = axes_object.legend([csi1Line,csi2Line,csi3Line], legend_labs,loc='lower left',fontsize=16)
     elif pod2 is not None:
         leg = axes_object.legend([csi1Line,csi2Line], legend_labs,loc='upper right',fontsize=16)
   
