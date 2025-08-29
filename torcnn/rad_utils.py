@@ -203,7 +203,7 @@ def plot_ppi(file_path,
         # Convert azimuth from degrees to radians for Matplotlib's polar plot
         # Azimuth angles typically go from 0 to 360.
         theta = np.deg2rad(azimuth)
-        
+       
         # Handle potential missing data values if needed
         # The ncdump shows MissingData = -99900.f and RangeFolded = -99901.f
         missing_data_value = ds.attrs.get('MissingData', -99900.0)
@@ -228,7 +228,7 @@ def plot_ppi(file_path,
        
         # Convert the limited range to kilometers
         r_km_limited = r_meters_limited / 1000.0
- 
+        
         # Plot the radar data
         if varname == 'Reflectivity':
             cmap = NWScmap; vmin=-10; vmax=75
@@ -258,57 +258,51 @@ def plot_ppi(file_path,
             calc_az_rad = math.radians(calc_az)
             
             if plot_segment:
-                # Azimuth slicing (clamped, non-wrapping)
-                num_azimuths = len(theta)
-                start_az_slice = azimuth_idx - n_az 
-                end_az_slice = azimuth_idx + n_az + 1 
-                    
+
                 # Gate slicing (clamped)
                 num_gates_limited = len(r_km_limited)
-                start_gate_slice = max(0, gate_idx - n_gate)
-                end_gate_slice = min(num_gates_limited, gate_idx + n_gate + 1) # +1 for exclusive end
-
-                if end_az_slice > num_azimuths:
-                    # Indicates that we're wrapping around 0 degrees
-                    rad_to_plot = np.concatenate([
-                                    rad_masked_limited[start_az_slice:num_azimuths, start_gate_slice:end_gate_slice],
-                                    rad_masked_limited[0:(end_az_slice-num_azimuths), start_gate_slice:end_gate_slice]
-                    ])
-                    theta_to_plot = np.concatenate([
-                                      theta[start_az_slice:num_azimuths],
-                                      theta[0:(end_az_slice-num_azimuths)]
-                    ])
-
-                    # Set az plot limits for the segment
-                    # For ax.set_thetamin and ax.set_thetamax, we need to < 0 and > 0 points
-                    theta_plot_min_deg = np.degrees(theta_to_plot[0])
-                    theta_plot_max_deg = np.degrees(theta_to_plot[-1])
-                elif start_az_slice < 0:
-                    # Indicates that we're wrapping around 0 degrees
-                    rad_to_plot = np.concatenate([
-                                    rad_masked_limited[start_az_slice:, start_gate_slice:end_gate_slice],
-                                    rad_masked_limited[0:end_az_slice, start_gate_slice:end_gate_slice]
-                    ])
-                    theta_to_plot = np.concatenate([
-                                      theta[start_az_slice:],
-                                      theta[0:end_az_slice]
-                    ])
-
-                    # Set az plot limits for the segment
-                    theta_plot_min_deg = np.degrees(theta_to_plot[0])
-                    theta_plot_max_deg = np.degrees(theta_to_plot[-1])
-                else:    
-                    rad_to_plot = rad_masked_limited[start_az_slice:end_az_slice, start_gate_slice:end_gate_slice]
-                    theta_to_plot = theta[start_az_slice:end_az_slice]
-                    
-                    # Set az plot limits for the segment
-                    theta_plot_min_deg = np.degrees(theta_to_plot.min())
-                    theta_plot_max_deg = np.degrees(theta_to_plot.max())
-
-                # Range should be unaffected by azimuth wrapping
-                r_to_plot = r_km_limited[start_gate_slice:end_gate_slice]
+                start_gate_idx = max(0, gate_idx - n_gate)
+                end_gate_idx = min(num_gates_limited, gate_idx + n_gate) # + 1) # +1 for exclusive end
+                r_to_plot = r_km_limited[start_gate_idx:end_gate_idx]
                 r_plot_min = r_to_plot.min()
                 r_plot_max = r_to_plot.max()
+
+                # Azimuth slicing (clamped, non-wrapping)
+                num_azimuths = len(theta)
+                start_az_idx = azimuth_idx - n_az 
+                end_az_idx = azimuth_idx + n_az #+ 1 
+
+                if end_az_idx > num_azimuths:
+                    # Indicates that we are wrapping around in DATA SPACE (not necessarily in azimuth)
+                    theta_to_plot = np.concatenate([theta[start_az_idx:], theta[0:(end_az_idx-num_azimuths)]])
+                    rad_to_plot = np.concatenate([
+                        rad_masked_limited[start_az_idx:, start_gate_idx:end_gate_idx],
+                        rad_masked_limited[0:(end_az_idx-num_azimuths), start_gate_idx:end_gate_idx]
+                    ])
+                elif start_az_idx < 0:
+                    # Indicates that we are wrapping around in DATA SPACE (not necessarily in azimuth)
+                    theta_to_plot = np.concatenate([theta[num_azimuths+start_az_idx:], theta[:end_az_idx]])
+                    rad_to_plot = np.concatenate([
+                        rad_masked_limited[num_azimuths+start_az_idx:, start_gate_idx:end_gate_idx],
+                        rad_masked_limited[:end_az_idx, start_gate_idx:end_gate_idx]
+                    ])
+                else:
+                    theta_to_plot = theta[start_az_idx:end_az_idx]
+                    rad_to_plot = rad_masked_limited[start_az_idx:end_az_idx, start_gate_idx:end_gate_idx]
+
+                theta_start, theta_end = theta_to_plot[0], theta_to_plot[-1]
+
+                R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
+                if theta_start > theta_end:
+                    # Indicates that we're wrapping around 0 degrees
+                    # Find where the discontinuity is
+                    diffs = np.diff(theta_to_plot)
+                    idx = np.where(diffs < 0)[0][0] + 1
+                    c1 = ax.pcolormesh(THETA[0:idx,:], R[0:idx,:], rad_to_plot[0:idx,:], cmap=cmap, vmin=vmin, vmax=vmax, shading='nearest')
+                    c = ax.pcolormesh(THETA[idx:,:], R[idx:,:], rad_to_plot[idx:,:], cmap=cmap, vmin=vmin, vmax=vmax, shading='nearest')
+                else:
+                    c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax, shading='nearest')
+
             else:
                 # Plot the full limited range
                 rad_to_plot = rad_masked_limited
@@ -320,6 +314,9 @@ def plot_ppi(file_path,
                 r_plot_max = rangemax
                 theta_plot_min_deg = 0
                 theta_plot_max_deg = 360 # For setting x-tick labels 
+
+                R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
+                c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax)
 
         else:       
             # Plot the full limited range
@@ -333,11 +330,11 @@ def plot_ppi(file_path,
             theta_plot_min_deg = 0
             theta_plot_max_deg = 360 # For setting x-tick labels
 
-        # Use pcolormesh for a 2D color plot in polar coordinates
-        # theta should be 2D, r should be 2D for pcolormesh to work correctly
-        # We need to broadcast theta and r to match the shape of raddata
-        R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
-        c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax)
+            # Use pcolormesh for a 2D color plot in polar coordinates
+            # theta should be 2D, r should be 2D for pcolormesh to work correctly
+            # We need to broadcast theta and r to match the shape of raddata
+            R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
+            c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax)
         
         if plot_segment:
             # Hide gridlines, axis border, and tick labels
@@ -365,6 +362,7 @@ def plot_ppi(file_path,
         # Set plot properties
         ax.set_theta_zero_location('N')  # North at the top
         ax.set_theta_direction(-1)      # Clockwise direction (standard for radar)
+        #ax.set_rorigin(-r_plot_min) 
        
         # Customize radial ticks (range)
         ax.set_rlabel_position(90) # Position of the radial labels
@@ -381,10 +379,6 @@ def plot_ppi(file_path,
         # Customize angular ticks (azimuth) based on segment or full plot
         if plot_segment:
 
-            # Set the sector
-            ax.set_thetamin(theta_plot_min_deg)
-            ax.set_thetamax(theta_plot_max_deg)
-           
             # Dynamically calculate angular ticks for the segment
             # Ensure degrees are within 0-360 range for display
             start_az_deg = np.degrees(theta_to_plot.min()) % 360
@@ -449,11 +443,6 @@ def plot_ppi(file_path,
                     ax.plot(angles_for_label, np.full_like(angles_for_label, r_val), color='black', linestyle=':', linewidth=0.8)
                     ax.text(theta_to_plot.max() + np.deg2rad(5), r_val, str(r_val), ha='left', va='center', fontsize=fs-2)
  
-            #ax.set_xticks(np.deg2rad(segment_azimuth_ticks))
-            #ax.set_xticklabels([f'{a:.0f}°' for a in segment_azimuth_ticks])
-
-            # Adjust radial limit to make space for labels 
-            #ax.set_rmax(r_plot_max + 0.2) 
 
         else:
             ax.set_xticks(np.deg2rad(np.arange(0, 360, 30)))
@@ -671,8 +660,15 @@ if __name__ == "__main__":
     #target_lat, target_lon = 41.3, -94.51
 
     # 9-10 km away example
-    file_path = '/data/thea.sandmael/data/radar/20160524/KDDC/netcdf/Velocity/00.50/20160524-235541.netcdf'
-    target_lat, target_lon = 37.77, -99.99 #37.7922, -100.0695
+    #file_path = '/data/thea.sandmael/data/radar/20160524/KDDC/netcdf/Velocity/00.50/20160524-235541.netcdf'
+    #target_lat, target_lon = 37.77, -99.99 #37.7922, -100.0695
+
+    # Due north example
+    file_path = '/myrorss2/work/thea.sandmael/radar/20240529/KFDX/netcdf/Velocity/00.50/20240529-003956.netcdf'
+    target_lat, target_lon = 35.5278, -103.543
+
+    #file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/Velocity/00.50/20240613-223435.netcdf'
+    #target_lat, target_lon = 40.0899, -91.7384
 
     # EF4 example (KFWS)
     #file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
