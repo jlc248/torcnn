@@ -42,13 +42,12 @@ for idx in range(100):
 
     file_path = f'{dataroot}/{row.radarTimestamp[0:8]}/{row.radar}/netcdf/Velocity/00.50/{row.radarTimestamp}.netcdf'
 
-    fig, radar = rad_utils.plot_ppi(file_path,
-                                    varname=varname,
-                                    Xlat=row.latitudeExtractCenter,
-                                    Xlon=row.longitudeExtractCenter,
-                                    window_size=window_size,
-                                    rangemax=300,
-                                    plot_segment=True,
+    fig, radar = rad_utils.plot_from_wdss2(file_path,
+                                           varname=varname,
+                                           Xlat=row.latitudeExtractCenter,
+                                           Xlon=row.longitudeExtractCenter,
+                                           window_size=window_size,
+                                           rangemax=300,
     )
    
     # annotate
@@ -84,13 +83,12 @@ for idx in range(100):
 
     file_path = f'{dataroot}/{row.radarTimestamp[0:8]}/{row.radar}/netcdf/Velocity/00.50/{row.radarTimestamp}.netcdf'
 
-    fig, radar = rad_utils.plot_ppi(file_path,
-                                    varname=varname,
-                                    Xlat=row.latitude,
-                                    Xlon=row.longitude,
-                                    window_size=window_size,
-                                    rangemax=300,
-                                    plot_segment=True,
+    fig, radar = rad_utils.plot_from_wdss2(file_path,
+                                            varname=varname,
+                                            Xlat=row.latitude,
+                                            Xlon=row.longitude,
+                                            window_size=window_size,
+                                            rangemax=300,
     )
 
     # annotate
@@ -126,13 +124,12 @@ for idx in range(100):
 
     file_path = f'{dataroot}/{row.radarTimestamp[0:8]}/{row.radar}/netcdf/Velocity/00.50/{row.radarTimestamp}.netcdf'
 
-    fig, radar = rad_utils.plot_ppi(file_path,
-                                    varname=varname,
-                                    Xlat=row.latitudeExtractCenter,
-                                    Xlon=row.longitudeExtractCenter,
-                                    window_size=window_size,
-                                    rangemax=300,
-                                    plot_segment=True,
+    fig, radar = rad_utils.plot_from_wdss2(file_path,
+                                           varname=varname,
+                                           Xlat=row.latitudeExtractCenter,
+                                           Xlon=row.longitudeExtractCenter,
+                                           window_size=window_size,
+                                           rangemax=300,
     )
 
     # annotate
@@ -169,13 +166,12 @@ for idx in range(100):
 
     file_path = f'{dataroot}/{row.radarTimestamp[0:8]}/{row.radar}/netcdf/Velocity/00.50/{row.radarTimestamp}.netcdf'
 
-    fig, radar = rad_utils.plot_ppi(file_path,
-                                    varname=varname,
-                                    Xlat=row.latitude,
-                                    Xlon=row.longitude,
-                                    window_size=window_size,
-                                    rangemax=300,
-                                    plot_segment=True,
+    fig, radar = rad_utils.plot_from_wdss2(file_path,
+                                           varname=varname,
+                                           Xlat=row.latitude,
+                                           Xlon=row.longitude,
+                                           window_size=window_size,
+                                           rangemax=300,
     )
 
     # annotate

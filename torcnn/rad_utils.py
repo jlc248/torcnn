@@ -1,3 +1,4 @@
+from typing import Dict, List, Any
 import xarray as xr
 import matplotlib.pyplot as plt
 import numpy as np
@@ -92,14 +93,112 @@ def plot_cartesian(file_path,
    
     plt.show()
 #-----------------------------------------------------------------------------------------------
+def get_img_info(c):
+    return {
+        'Velocity':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
+        'AliasedVelocity':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
+        'PhiDP':{'cmap':'gnuplot', 'vmin':0, 'vmax':360, 'units':'deg'},
+        'RhoHV':{'cmap':'rainbow', 'vmin':0.45, 'vmax':1, 'units':'correlation'},
+        'SpectrumWidth':{'cmap':'cubehelix', 'vmin':0, 'vmax':10, 'units':'m/s'},
+        'AzShear':{'cmap':'bwr', 'vmin':-0.02, 'vmax':0.02, 'units':'1/s'},
+        'DivShear':{'cmap':'PiYG', 'vmin':-0.02, 'vmax':0.02, 'units':'1/s'},
+        'Reflectivity':{'cmap':NWScmap, 'vmin':-10, 'vmax':75, 'units':'dBZ'},
+        'Zdr':{'cmap':'Spectral_r', 'vmin':-5, 'vmax':5, 'units':'dB'},
+    }.get(c,'')
 
-def plot_ppi(file_path,
-             varname,
-             rangemax=300,
-             Xlat=None,
-             Xlon=None,
-             window_size=None,
-             plot_segment=False
+#-----------------------------------------------------------------------------------------------
+def plot_radar(
+        data: Dict[str,Any],
+        channels: List[str]=['Reflectivity','Velocity'],
+        fig:plt.Figure=None,
+        include_cbar:bool=False,
+        include_title:bool=True,
+        n_rows:int=None,
+        n_cols:int=None,
+        rticks: List=None,
+        tticks: List=None
+):
+    """
+    Plot radar PPIs. Adapted from MIT LL TorNet code.
+    """
+
+    if fig is None:
+        fig = plt.figure()
+
+    if data['az_lower'] > data['az_upper']:
+        az_lower_to_use=data['az_lower']-360
+    else:
+        az_lower_to_use=data['az_lower']
+
+    az_min  = np.float32(az_lower_to_use) * np.pi/180
+    az_max = np.float32(data['az_upper']) * np.pi/180
+    rmin = np.float32(data['rng_lower'])
+    rmax = np.float32(data['rng_upper'])
+
+    n_az, n_rng = data['Velocity'].shape
+
+    T = np.linspace(az_min,az_max,n_az)
+    R = np.linspace(rmin,rmax,n_rng)
+    R,T = np.meshgrid(R,T)
+
+    for k, c in enumerate(channels):
+        if n_rows is None:
+            ax = fig.add_subplot(1, len(channels), k+1, polar=True)
+        else:
+            ax = fig.add_subplot(n_rows, n_cols, k+1, polar=True)
+
+        ax.set_theta_zero_location('N') # radar convention
+        ax.set_theta_direction(-1)
+
+        ax.grid(False)
+        
+        info = get_img_info(c)
+        im = ax.pcolormesh(T, R-rmin, data[c], shading='nearest', cmap=info['cmap'], vmin=info['vmin'], vmax=info['vmax'])
+
+        ax.set_rorigin(-rmin)
+        ax.set_thetalim([az_min,az_max])
+
+        ax.set_xticklabels([]) # turns off ticks
+        ax.set_yticklabels([])
+
+        fs = 6
+        if rticks is None:
+            rt = np.linspace(0, rmax-rmin, 4)
+            # This `fig.canvas.draw()` is needed to adjust fontsize due to some issue with matplotlib
+            #https://github.com/matplotlib/matplotlib/issues/17463
+            fig.canvas.draw() 
+            ax.set_rgrids(rt ,labels=(rt+rmin).astype(np.int64), fontsize=fs)
+        else:
+            fig.canvas.draw()
+            ax.set_rgrids(rt, labels=[str(rt) for rt in rt], fontsize=fs)
+
+        if tticks is None:
+            tt = np.linspace(az_lower_to_use, data['az_upper'], 4)
+            tt_labs = []
+            for theta_lab in tt:
+                if theta_lab < 0:
+                    tt_labs.append(str(int(round(theta_lab+360))) + '$^\circ$')
+                else:
+                    tt_labs.append(str(int(round(theta_lab))) + '$^\circ$')
+            ax.set_thetagrids(tt, labels=tt_labs, fontsize=fs)
+        else:
+            ax.set_thetagrids(tt, labels=[str(_) + '$^\circ$' for _ in tt], fontsize=fs)
+
+        ax.grid(linestyle=":", color='black')
+ 
+        if include_cbar:
+            fig.colorbar(im,location='right',shrink=.65,label=f"{c} [{info['units']}]")
+        if include_title:
+            ax.set_title(c)
+
+
+#-----------------------------------------------------------------------------------------------
+def plot_from_wdss2(file_path,
+                    varname,
+                    rangemax=300,
+                    Xlat=None,
+                    Xlon=None,
+                    window_size=None,
 ):
     """
     Plots a PPI from WDSS2-decoded netcdfs.
@@ -110,16 +209,15 @@ def plot_ppi(file_path,
     - Xlat (float or None): An optional latitude to plot
     - Xlon (float or None): An optional longitude to plot
     - window_size tuple (int, int): +/- points from Xlat/Xlon in polar coordinates for segment plot 
-    - plot_segment (bool): Plot only the segment defined by Xlat, Xlon, and window_size
     """
 
     n_az, n_gate = window_size
 
+    data = {}
+
     if isinstance(varname, str):
         varnames = [varname]
         file_paths = [file_path]
-        fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(10, 8))
-        axes = [ax]
         oneplot = True
         fs = 14
     else:
@@ -171,11 +269,13 @@ def plot_ppi(file_path,
             print('Too many (or too few) variables to plot!')
             sys.exit(1)
 
-        fig, axes = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=figsize, nrows=nrows, ncols=ncols)#, gridspec_kw={'wspace': 0.05, 'hspace': 0.05})
+        fig, axes = plt.subplots(figsize=figsize, nrows=nrows, ncols=ncols)#, gridspec_kw={'wspace': 0.05, 'hspace': 0.05})
         axes = axes.flat
+        # Removing the initial axes...plot_radar function will configure
+        for ax in axes:
+            ax.remove()
 
     for ii, file_path in enumerate(file_paths):
-        ax = axes[ii]
         varname = varnames[ii]
 
         # Open the netCDF file using xarray
@@ -190,20 +290,17 @@ def plot_ppi(file_path,
         # Calculate radial distances (r) for each gate
         # The 'Gate' dimension represents the index of the gate, not the actual distance.
         # We need to calculate the distance for each gate based on RangeToFirstGate and GateWidth.
-        # Let's assume the gate values are 0-indexed.
         # The distance to each gate can be calculated as RangeToFirstGate + (gate_index * GateWidth)
-        # However, GateWidth is a variable with Azimuth dimension. For a simple plot,
-        # we can take the mean GateWidth, or if more precision is needed, handle
-        # the varying gate width per azimuth. For now, let's use the mean.
+        # However, GateWidth is a variable with Azimuth dimension.
         
         # Create an array of gate distances (r)
         gates = np.arange(ds.sizes['Gate'])
         r_meters = range_to_first_gate + (gates * gate_width)
         
         # Convert azimuth from degrees to radians for Matplotlib's polar plot
-        # Azimuth angles typically go from 0 to 360.
-        theta = np.deg2rad(azimuth)
-       
+        theta = np.copy(azimuth)       
+        ntheta = len(theta)
+
         # Handle potential missing data values if needed
         # The ncdump shows MissingData = -99900.f and RangeFolded = -99901.f
         missing_data_value = ds.attrs.get('MissingData', -99900.0)
@@ -229,24 +326,6 @@ def plot_ppi(file_path,
         # Convert the limited range to kilometers
         r_km_limited = r_meters_limited / 1000.0
         
-        # Plot the radar data
-        if varname == 'Reflectivity':
-            cmap = NWScmap; vmin=-10; vmax=75
-        elif varname == 'AzShear':
-            cmap = 'bwr'; vmin=-0.02; vmax=0.02
-        elif varname == 'DivShear':
-            cmap = 'PiYG'; vmin=-0.02; vmax=0.02
-        elif varname == 'Velocity' or varname == 'AliasedVelocity':
-            cmap = 'PiYG'; vmin=-50; vmax=50
-        elif varname == 'SpectrumWidth':
-            cmap = 'cubehelix'; vmin=0; vmax=10
-        elif varname == 'Zdr':
-            cmap = 'Spectral_r'; vmin=-5; vmax=5
-        elif varname == 'RhoHV':
-            cmap = 'rainbow'; vmin=0.45; vmax=1
-        elif varname == 'PhiDP':
-            cmap = 'gnuplot2'; vmin=0; vmax=360;
-
         # Get center location, if desired
         if Xlat is not None and Xlon is not None:
             try:
@@ -257,208 +336,86 @@ def plot_ppi(file_path,
             calc_range /= 1000 # convert to km
             calc_az_rad = math.radians(calc_az)
             
-            if plot_segment:
+            # Gate slicing (clamped)
+            num_gates_limited = len(r_km_limited)
+            start_gate_idx = max(0, gate_idx - n_gate)
+            end_gate_idx = min(num_gates_limited, gate_idx + n_gate) # + 1) # +1 for exclusive end
+            r_to_plot = r_km_limited[start_gate_idx:end_gate_idx]
+            data['rng_lower'] = r_plot_min = r_to_plot.min()
+            data['rng_upper'] = r_plot_max = r_to_plot.max()
 
-                # Gate slicing (clamped)
-                num_gates_limited = len(r_km_limited)
-                start_gate_idx = max(0, gate_idx - n_gate)
-                end_gate_idx = min(num_gates_limited, gate_idx + n_gate) # + 1) # +1 for exclusive end
-                r_to_plot = r_km_limited[start_gate_idx:end_gate_idx]
-                r_plot_min = r_to_plot.min()
-                r_plot_max = r_to_plot.max()
+            # Azimuth slicing (clamped, non-wrapping)
+            num_azimuths = len(theta)
+            start_az_idx = azimuth_idx - n_az 
+            end_az_idx = azimuth_idx + n_az #+ 1 
 
-                # Azimuth slicing (clamped, non-wrapping)
-                num_azimuths = len(theta)
-                start_az_idx = azimuth_idx - n_az 
-                end_az_idx = azimuth_idx + n_az #+ 1 
+            try:
+                data['az_upper'] = theta[azimuth_idx + n_az] # in degrees
+            except IndexError:
+                data['az_upper'] = theta[azimuth_idx + n_az - ntheta]
+            data['az_lower'] = theta[azimuth_idx - n_az] 
 
-                if end_az_idx > num_azimuths:
-                    # Indicates that we are wrapping around in DATA SPACE (not necessarily in azimuth)
-                    theta_to_plot = np.concatenate([theta[start_az_idx:], theta[0:(end_az_idx-num_azimuths)]])
-                    rad_to_plot = np.concatenate([
-                        rad_masked_limited[start_az_idx:, start_gate_idx:end_gate_idx],
-                        rad_masked_limited[0:(end_az_idx-num_azimuths), start_gate_idx:end_gate_idx]
-                    ])
-                elif start_az_idx < 0:
-                    # Indicates that we are wrapping around in DATA SPACE (not necessarily in azimuth)
-                    theta_to_plot = np.concatenate([theta[num_azimuths+start_az_idx:], theta[:end_az_idx]])
-                    rad_to_plot = np.concatenate([
-                        rad_masked_limited[num_azimuths+start_az_idx:, start_gate_idx:end_gate_idx],
-                        rad_masked_limited[:end_az_idx, start_gate_idx:end_gate_idx]
-                    ])
-                else:
-                    theta_to_plot = theta[start_az_idx:end_az_idx]
-                    rad_to_plot = rad_masked_limited[start_az_idx:end_az_idx, start_gate_idx:end_gate_idx]
-
-                theta_start, theta_end = theta_to_plot[0], theta_to_plot[-1]
-
-                R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
-                if theta_start > theta_end:
-                    # Indicates that we're wrapping around 0 degrees
-                    # Find where the discontinuity is
-                    diffs = np.diff(theta_to_plot)
-                    idx = np.where(diffs < 0)[0][0] + 1
-                    c1 = ax.pcolormesh(THETA[0:idx,:], R[0:idx,:], rad_to_plot[0:idx,:], cmap=cmap, vmin=vmin, vmax=vmax, shading='nearest')
-                    c = ax.pcolormesh(THETA[idx:,:], R[idx:,:], rad_to_plot[idx:,:], cmap=cmap, vmin=vmin, vmax=vmax, shading='nearest')
-                else:
-                    c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax, shading='nearest')
-
+            if end_az_idx > num_azimuths:
+                # Indicates that we are wrapping around in DATA SPACE (not necessarily in azimuth)
+                theta_to_plot = np.concatenate([theta[start_az_idx:], theta[0:(end_az_idx-num_azimuths)]])
+                rad_to_plot = np.concatenate([
+                    rad_masked_limited[start_az_idx:, start_gate_idx:end_gate_idx],
+                    rad_masked_limited[0:(end_az_idx-num_azimuths), start_gate_idx:end_gate_idx]
+                ])
+            elif start_az_idx < 0:
+                # Indicates that we are wrapping around in DATA SPACE (not necessarily in azimuth)
+                theta_to_plot = np.concatenate([theta[num_azimuths+start_az_idx:], theta[:end_az_idx]])
+                rad_to_plot = np.concatenate([
+                    rad_masked_limited[num_azimuths+start_az_idx:, start_gate_idx:end_gate_idx],
+                    rad_masked_limited[:end_az_idx, start_gate_idx:end_gate_idx]
+                ])
             else:
-                # Plot the full limited range
-                rad_to_plot = rad_masked_limited
-                theta_to_plot = theta
-                r_to_plot = r_km_limited
+                theta_to_plot = theta[start_az_idx:end_az_idx]
+                rad_to_plot = rad_masked_limited[start_az_idx:end_az_idx, start_gate_idx:end_gate_idx]
 
-                # Set plot limits for the full PPI
-                r_plot_min = 0
-                r_plot_max = rangemax
-                theta_plot_min_deg = 0
-                theta_plot_max_deg = 360 # For setting x-tick labels 
-
-                R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
-                c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax)
-
+            data[varname] = rad_to_plot
+            rticks = tticks = None
         else:       
             # Plot the full limited range
-            rad_to_plot = rad_masked_limited
-            theta_to_plot = theta
-            r_to_plot = r_km_limited
+            data[varname] = rad_masked_limited
+            data['az_upper'] = 359.99
+            data['az_lower'] = 0
+            data['rng_upper'] = r_km_limited.max()
+            data['rng_lower'] = r_km_limited.min()
+            rticks = [75, 150, 225, 300]
+            tticks = [90, 180, 270, 360]
 
-            # Set plot limits for the full PPI
-            r_plot_min = 0
-            r_plot_max = rangemax
-            theta_plot_min_deg = 0
-            theta_plot_max_deg = 360 # For setting x-tick labels
 
-            # Use pcolormesh for a 2D color plot in polar coordinates
-            # theta should be 2D, r should be 2D for pcolormesh to work correctly
-            # We need to broadcast theta and r to match the shape of raddata
-            R, THETA = np.meshgrid(r_to_plot, theta_to_plot)
-            c = ax.pcolormesh(THETA, R, rad_to_plot, cmap=cmap, vmin=vmin, vmax=vmax)
-        
-        if plot_segment:
-            # Hide gridlines, axis border, and tick labels
-            ax.grid(False)
-            ax.spines['polar'].set_visible(False)
-            ax.set_yticklabels([])
-            ax.set_xticklabels([])
- 
         # Plot an X at the given location
         if Xlat is not None and Xlon is not None:
             #ax.plot(calc_az_rad, calc_range, markersize=15, marker='o', markeredgewidth=3,  markerfacecolor='none', color='black')
             if oneplot: ax.plot(calc_az_rad, calc_range, markersize=15, marker='o', markeredgewidth=3,  markerfacecolor='none', color='black')
-  
-        # Add a colorbar
-        cbar = fig.colorbar(c, ax=ax, orientation='vertical', pad=0.1, shrink=0.75)
-        if ds[varname].units == 'MetersPerSecond':
-            label = 'm/s'
-        elif ds[varname].units == 'dimensionless':
-            label = ' '
-        else: 
-            label = ds[varname].units
-        cbar.set_label(f'{varname} ({label})', fontsize=fs)
-        cbar.ax.tick_params(labelsize=fs-2)       
- 
-        # Set plot properties
-        ax.set_theta_zero_location('N')  # North at the top
-        ax.set_theta_direction(-1)      # Clockwise direction (standard for radar)
-        #ax.set_rorigin(-r_plot_min) 
-       
-        # Customize radial ticks (range)
-        ax.set_rlabel_position(90) # Position of the radial labels
-        if oneplot:
-            ax.set_ylabel(f'Range (km)', labelpad=30) # Label for radial axis
-        
-        # Set custom radial ticks for kilometers
-        if plot_segment:
-            # Create a few ticks within the zoomed range
-            r_ticks = np.round(np.linspace(r_plot_min, r_plot_max, num=4, endpoint=True)).astype(int)
-        else:
-            r_ticks = np.arange(0, rangemax + 1, 50)
 
-        # Customize angular ticks (azimuth) based on segment or full plot
-        if plot_segment:
-
-            # Dynamically calculate angular ticks for the segment
-            # Ensure degrees are within 0-360 range for display
-            start_az_deg = np.degrees(theta_to_plot.min()) % 360
-            end_az_deg = np.degrees(theta_to_plot.max()) % 360
-
-            # Rounded to nearest 5 or 10 degrees for readability
-            num_desired_ticks = 4
-            approx_interval = (end_az_deg - start_az_deg) / (num_desired_ticks - 1)
-            # Round interval to nearest nice number (e.g., 1, 2, 5, 10)
-            if approx_interval > 10:
-                tick_interval = round(approx_interval / 10) * 10
-            elif approx_interval > 5:
-                tick_interval = 5
-            elif approx_interval > 2:
-                tick_interval = 2
-            else:
-                tick_interval = 1
-            tick_interval = max(1, tick_interval) # Ensure it's at least 1
-
-            if abs(end_az_deg - start_az_deg) > 180:
-                az_fold = True
-                # Indicates that we cross the azimuth folding line (north)
-                left_flank = np.degrees(theta_to_plot[0])
-                right_flank = np.degrees(theta_to_plot[-1])
-                
-                # Transform these flanks so that they don't cross the folding line
-                left_flank_trans = 90 - (360 - left_flank) # assumes left flank is always in Q4
-                right_flank_trans = right_flank + 90
-                
-                # New interval
-                approx_interval = (right_flank_trans - left_flank_trans) / (num_desired_ticks - 1)
-                tick_interval = round(approx_interval / 10) * 10
-                transformed_ticks = np.arange(left_flank_trans, right_flank_trans, tick_interval)
-                
-                # Transform back to North being 0 degrees
-                azimuth_ticks = transformed_ticks - 90
-                azimuth_ticks[azimuth_ticks < 0] = 360 + azimuth_ticks[azimuth_ticks < 0]
-            else:
-                az_fold = False
-                azimuth_ticks = np.round(np.arange(start_az_deg, end_az_deg, tick_interval), 1)
-
-            azimuth_ticks_rad = np.deg2rad(azimuth_ticks)
-            
-            # Plot custom azimuth labels (lines and text)
-            for angle, label in zip(azimuth_ticks_rad, azimuth_ticks):
-                ax.plot([angle, angle], [r_plot_min, r_plot_max], color='black', linestyle=':', linewidth=0.8)
-                ax.text(angle, r_plot_max + 0.1, f'{int(round(label))}°', ha='center', va='bottom', fontsize=fs-2)
-            
-            # Plot custom range labels (arcs and text)
-            for r_val in r_ticks:
-                if az_fold:
-                    # Divide the line plotting over 0 degrees
-                    angles_for_label = np.linspace(azimuth_ticks_rad[0], np.deg2rad(360), 50)
-                    ax.plot(angles_for_label, np.full_like(angles_for_label, r_val), color='black', linestyle=':', linewidth=0.8)
-                    ax.text(theta_to_plot.max() + np.deg2rad(5), r_val, str(r_val), ha='left', va='center', fontsize=fs-2)
-                   
-                    angles_for_label = np.linspace(0, azimuth_ticks_rad[-1], 50)
-                    ax.plot(angles_for_label, np.full_like(angles_for_label, r_val), color='black', linestyle=':', linewidth=0.8)
-                    ax.text(theta_to_plot.max() + np.deg2rad(5), r_val, str(r_val), ha='left', va='center', fontsize=fs-2)
-                else:
-                    angles_for_label = np.linspace(theta_to_plot.min(), theta_to_plot.max(), 50)
-                    ax.plot(angles_for_label, np.full_like(angles_for_label, r_val), color='black', linestyle=':', linewidth=0.8)
-                    ax.text(theta_to_plot.max() + np.deg2rad(5), r_val, str(r_val), ha='left', va='center', fontsize=fs-2)
- 
-
-        else:
-            ax.set_xticks(np.deg2rad(np.arange(0, 360, 30)))
-            ax.set_xticklabels([f'{a}°' for a in np.arange(0, 360, 30)])
-        
         # Set title
         scan_time = ds.attrs['Time']
         dt_object = datetime.utcfromtimestamp(scan_time)
-        if oneplot:
-            ax.set_title(f'{radar_name} {varname} PPI (Elevation: {ds.attrs["Elevation"]} {ds.attrs["ElevationUnits"]})\nTime: {dt_object} UTC', va='bottom')
-    
+#        if oneplot:
+#            ax.set_title(f'{radar_name} {varname} PPI (Elevation: {ds.attrs["Elevation"]} {ds.attrs["ElevationUnits"]})\nTime: {dt_object} UTC', va='bottom')
+
+        # Close the dataset
+        elev = ds.attrs["Elevation"]
+        elev_units = ds.attrs["ElevationUnits"]
+        ds.close()
+   
+    plot_radar(data,
+               channels=varnames,
+               fig=fig,
+               include_cbar=True,
+               include_title=False,
+               rticks=rticks,
+               tticks=tticks,
+              # n_rows=nrows,
+              # n_cols=ncols
+    )
+ 
     if not oneplot:
-        plt.suptitle(f'{radar_name} PPI (Elevation: {ds.attrs["Elevation"]} {ds.attrs["ElevationUnits"]})\nTime: {dt_object} UTC', va='bottom', y=0.85)
+        plt.suptitle(f'{radar_name} PPI (Elevation: {elev} {elev_units})\nTime: {dt_object} UTC', va='bottom', y=0.85)
     
-    # Close the dataset
-    ds.close()
     
     return plt.gcf(), radar_name
 #-------------------------------------------------------------------------------------------------------------
@@ -667,8 +624,8 @@ if __name__ == "__main__":
     file_path = '/myrorss2/work/thea.sandmael/radar/20240529/KFDX/netcdf/Velocity/00.50/20240529-003956.netcdf'
     target_lat, target_lon = 35.5278, -103.543
 
-    #file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/Velocity/00.50/20240613-223435.netcdf'
-    #target_lat, target_lon = 40.0899, -91.7384
+    file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/Velocity/00.50/20240613-223435.netcdf'
+    target_lat, target_lon = 40.0899, -91.7384
 
     # EF4 example (KFWS)
     #file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
@@ -679,13 +636,12 @@ if __name__ == "__main__":
     #varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
     varname = ['Reflectivity', 'Velocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
 
-    fig, radar = plot_ppi(file_path,
-                          varname=varname,
-                          Xlat=target_lat,
-                          Xlon=target_lon,
-                          window_size=window_size,
-                          rangemax=300,
-                          plot_segment=True,
+    fig, radar = plot_from_wdss2(file_path,
+                                 varname=varname,
+                                 Xlat=target_lat,
+                                 Xlon=target_lon,
+                                 window_size=window_size,
+                                 rangemax=300,
     )
 
     if isinstance(varname, str):
