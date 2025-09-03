@@ -83,7 +83,6 @@ def plot_cartesian(file_path,
         cmap = 'PiYG'; vmin=-0.006; vmax=0.006
     elif varname == 'Velocity' or varname == 'AliasedVelocity':
         cmap = 'PiYG'; vmin=-50; vmax=50 
-    
 
     c = ax.pcolormesh(THETA, R, rad_masked_limited, cmap=cmap, vmin=vmin, vmax=vmax)
    
@@ -154,13 +153,22 @@ def plot_radar(
         ax.grid(False)
         
         info = get_img_info(c)
+        cmap = info['cmap']
+        if isinstance(cmap, str):
+            cmap = plt.get_cmap(cmap)
+        if c in ['Reflectivity', 'Zdr', 'RhoHV', 'PhiDP']:
+            cmap.set_bad(color='white') 
+        elif c in ['Velocity', 'AliasedVelocity', 'SpectrumWidth', 'AzShear', 'DivShear']:
+            cmap.set_bad(color='purple')
+
         if full_ppi:
             R, T = np.meshgrid(data[c]['ranges'], np.deg2rad(data[c]['azimuths']))
-            im = ax.pcolormesh(T, R, data[c]['data'], shading='nearest', cmap=info['cmap'], vmin=info['vmin'], vmax=info['vmax'])
+            im = ax.pcolormesh(T, R, data[c]['data'], shading='nearest', cmap=cmap, vmin=info['vmin'], vmax=info['vmax'])
         else:
-            im = ax.pcolormesh(T, R-rmin, data[c]['data'], shading='nearest', cmap=info['cmap'], vmin=info['vmin'], vmax=info['vmax'])
+            im = ax.pcolormesh(T, R-rmin, data[c]['data'], shading='nearest', cmap=cmap, vmin=info['vmin'], vmax=info['vmax'])
             ax.set_rorigin(-rmin)
             ax.set_thetalim([az_min,az_max])
+
 
         ax.set_xticklabels([]) # turns off ticks
         ax.set_yticklabels([])
@@ -169,13 +177,17 @@ def plot_radar(
         if full_ppi:
             fig.canvas.draw()
             rt = [75, 150, 225, 300]
-            ax.set_rgrids(rt, labels=[str(_) for _ in rt], fontsize=fs)
+            rt_labs = [str(_) for _ in rt]
+            rt_labs[-1] += ' km'
+            ax.set_rgrids(rt, labels=rt_labs, fontsize=fs)
         else:
             rt = np.linspace(0, rmax-rmin, 4)
             # This `fig.canvas.draw()` is needed to adjust fontsize due to some issue with matplotlib
             #https://github.com/matplotlib/matplotlib/issues/17463
             fig.canvas.draw() 
-            ax.set_rgrids(rt ,labels=(rt+rmin).astype(np.int64), fontsize=fs)
+            rt_labs= [str(int(_ + rmin)) for _ in rt]
+            rt_labs[0] += ' km'
+            ax.set_rgrids(rt ,labels=rt_labs, fontsize=fs)
 
         if full_ppi:
             tt = [90, 180, 270, 360]
@@ -300,9 +312,13 @@ def plot_from_wdss2(file_path,
         range_folded_value = ds.attrs.get('RangeFolded', -99901.0)
         
         # Replace missing values with NaN for plotting
-        rad_masked = np.where(raddata == missing_data_value, np.nan, raddata)
-        rad_masked = np.where(rad_masked == range_folded_value, np.nan, rad_masked)
-       
+        if varname in ['Reflectivity', 'Zdr', 'RhoHV', 'PhiDP']:
+            rad_masked = np.where(raddata == missing_data_value, np.nan, raddata)
+        elif varname in ['Velocity', 'AliasedVelocity', 'SpectrumWidth', 'AzShear', 'DivShear']:
+            rad_masked = np.where(raddata == missing_data_value, 0, raddata)
+            rad_masked = np.where(rad_masked == range_folded_value, np.nan, rad_masked)
+      
+ 
         # Find the index where the range exceeds the limit
         max_range_index = np.where(r_meters > rangemax * 1000)[0] # Convert km to meters for comparison
 
@@ -584,23 +600,23 @@ if __name__ == "__main__":
     #target_lat, target_lon = 37.29, -98.03
     
     # 127 km away example
-    #file_path = '/data/thea.sandmael/data/radar/20140618/KFSD/netcdf/Velocity/00.50/20140618-030239.netcdf'
+    #file_path = '/myrorss2/data/thea.sandmael/data/radar/20140618/KFSD/netcdf/Velocity/00.50/20140618-030239.netcdf'
     #target_lat, target_lon = 42.4988, -97.0407
 
     # 166 km away example
-    #file_path = '/data/thea.sandmael/data/radar/20151223/KNQA/netcdf/Velocity/00.50/20151223-205557.netcdf'
+    #file_path = '/myrorss2/data/thea.sandmael/data/radar/20151223/KNQA/netcdf/Velocity/00.50/20151223-205557.netcdf'
     #target_lat, target_lon = 34, -90.71
 
     # Wisconsin example
-    #file_path = '/work/thea.sandmael/radar/20240522/KARX/netcdf/Velocity/00.50/20240522-002936.netcdf'
+    #file_path = '/myrorss2/work/thea.sandmael/radar/20240522/KARX/netcdf/Velocity/00.50/20240522-002936.netcdf'
     #target_lat, target_lon = 44.75, -90.5
 
     # Greenfield, Iowa
-    #file_path = '/work/thea.sandmael/radar/20240521/KDMX/netcdf/Velocity/00.50/20240521-204123.netcdf'
+    #file_path = '/myrorss2/work/thea.sandmael/radar/20240521/KDMX/netcdf/Velocity/00.50/20240521-204123.netcdf'
     #target_lat, target_lon = 41.3, -94.51
 
     # 9-10 km away example
-    #file_path = '/data/thea.sandmael/data/radar/20160524/KDDC/netcdf/Velocity/00.50/20160524-235541.netcdf'
+    #file_path = '/myrorss2/data/thea.sandmael/data/radar/20160524/KDDC/netcdf/Velocity/00.50/20160524-235541.netcdf'
     #target_lat, target_lon = 37.77, -99.99 #37.7922, -100.0695
 
     # Due north example
@@ -612,7 +628,7 @@ if __name__ == "__main__":
     target_lat, target_lon = 40.0899, -91.7384
 
     # EF4 example (KFWS)
-    #file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
+    #file_path = '/myrorss2/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
     #target_lat, target_lon = 32.51, -95.91
 
     patch_size = 64, 128 #120//2, 240//2 # n_az_patch, n_gate_patch # these are half-sizes
