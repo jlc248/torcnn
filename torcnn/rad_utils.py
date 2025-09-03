@@ -115,8 +115,7 @@ def plot_radar(
         include_title:bool=True,
         n_rows:int=None,
         n_cols:int=None,
-        rticks: List=None,
-        tticks: List=None
+        full_ppi: bool=False,
 ):
     """
     Plot radar PPIs. Adapted from MIT LL TorNet code.
@@ -124,22 +123,24 @@ def plot_radar(
 
     if fig is None:
         fig = plt.figure()
+    
+    if not full_ppi: 
+        if data['az_lower'] > data['az_upper']:
+            az_lower_to_use=data['az_lower']-360
+        else:
+            az_lower_to_use=data['az_lower']
+    
+        az_min  = np.float32(az_lower_to_use) * np.pi/180
+        az_max = np.float32(data['az_upper']) * np.pi/180
+        rmin = np.float32(data['rng_lower'])
+        rmax = np.float32(data['rng_upper'])
+    
+        n_az_patch, n_rng_patch = data['Velocity']['data'].shape
+    
+        T = np.linspace(az_min,az_max,n_az_patch)
+        R = np.linspace(rmin,rmax,n_rng_patch)
+        R,T = np.meshgrid(R,T)
 
-    if data['az_lower'] > data['az_upper']:
-        az_lower_to_use=data['az_lower']-360
-    else:
-        az_lower_to_use=data['az_lower']
-
-    az_min  = np.float32(az_lower_to_use) * np.pi/180
-    az_max = np.float32(data['az_upper']) * np.pi/180
-    rmin = np.float32(data['rng_lower'])
-    rmax = np.float32(data['rng_upper'])
-
-    n_az, n_rng = data['Velocity'].shape
-
-    T = np.linspace(az_min,az_max,n_az)
-    R = np.linspace(rmin,rmax,n_rng)
-    R,T = np.meshgrid(R,T)
 
     for k, c in enumerate(channels):
         if n_rows is None:
@@ -153,26 +154,33 @@ def plot_radar(
         ax.grid(False)
         
         info = get_img_info(c)
-        im = ax.pcolormesh(T, R-rmin, data[c], shading='nearest', cmap=info['cmap'], vmin=info['vmin'], vmax=info['vmax'])
-
-        ax.set_rorigin(-rmin)
-        ax.set_thetalim([az_min,az_max])
+        if full_ppi:
+            R, T = np.meshgrid(data[c]['ranges'], np.deg2rad(data[c]['azimuths']))
+            im = ax.pcolormesh(T, R, data[c]['data'], shading='nearest', cmap=info['cmap'], vmin=info['vmin'], vmax=info['vmax'])
+        else:
+            im = ax.pcolormesh(T, R-rmin, data[c]['data'], shading='nearest', cmap=info['cmap'], vmin=info['vmin'], vmax=info['vmax'])
+            ax.set_rorigin(-rmin)
+            ax.set_thetalim([az_min,az_max])
 
         ax.set_xticklabels([]) # turns off ticks
         ax.set_yticklabels([])
 
         fs = 6
-        if rticks is None:
+        if full_ppi:
+            fig.canvas.draw()
+            rt = [75, 150, 225, 300]
+            ax.set_rgrids(rt, labels=[str(_) for _ in rt], fontsize=fs)
+        else:
             rt = np.linspace(0, rmax-rmin, 4)
             # This `fig.canvas.draw()` is needed to adjust fontsize due to some issue with matplotlib
             #https://github.com/matplotlib/matplotlib/issues/17463
             fig.canvas.draw() 
             ax.set_rgrids(rt ,labels=(rt+rmin).astype(np.int64), fontsize=fs)
-        else:
-            fig.canvas.draw()
-            ax.set_rgrids(rt, labels=[str(rt) for rt in rt], fontsize=fs)
 
-        if tticks is None:
+        if full_ppi:
+            tt = [90, 180, 270, 360]
+            ax.set_thetagrids(tt, labels=[str(_) + '$^\circ$' for _ in tt], fontsize=fs)
+        else: 
             tt = np.linspace(az_lower_to_use, data['az_upper'], 4)
             tt_labs = []
             for theta_lab in tt:
@@ -181,8 +189,6 @@ def plot_radar(
                 else:
                     tt_labs.append(str(int(round(theta_lab))) + '$^\circ$')
             ax.set_thetagrids(tt, labels=tt_labs, fontsize=fs)
-        else:
-            ax.set_thetagrids(tt, labels=[str(_) + '$^\circ$' for _ in tt], fontsize=fs)
 
         ax.grid(linestyle=":", color='black')
  
@@ -198,7 +204,7 @@ def plot_from_wdss2(file_path,
                     rangemax=300,
                     Xlat=None,
                     Xlon=None,
-                    window_size=None,
+                    patch_size=None,
 ):
     """
     Plots a PPI from WDSS2-decoded netcdfs.
@@ -208,10 +214,13 @@ def plot_from_wdss2(file_path,
     - rangemax (int): the maximum range to plot, in km from radar
     - Xlat (float or None): An optional latitude to plot
     - Xlon (float or None): An optional longitude to plot
-    - window_size tuple (int, int): +/- points from Xlat/Xlon in polar coordinates for segment plot 
+    - patch_size tuple (int, int): +/- grid points from Xlat/Xlon grid point in polar coordinates for segment plot 
     """
 
-    n_az, n_gate = window_size
+    if patch_size:
+        n_az_patch, n_gate_patch = patch_size
+    else:
+        n_az_patch, n_gate_patch = None, None
 
     data = {}
 
@@ -219,15 +228,10 @@ def plot_from_wdss2(file_path,
         varnames = [varname]
         file_paths = [file_path]
         oneplot = True
-        fs = 14
     else:
         # It is a list of strings. This mean we want a multipanel.
         oneplot = False
         varnames = varname
-
-        # e.g. file_path
-        #/data/thea.sandmael/data/radar/20120220/KVNX/netcdf/Reflectivity/00.50/20120220-211412.netcdf
-
         tilt = os.path.basename(os.path.dirname(file_path))
         raddt = datetime.strptime(os.path.basename(file_path), '%Y%m%d-%H%M%S.netcdf')
         rootdir = os.path.dirname(os.path.dirname(os.path.dirname(file_path)))   
@@ -244,27 +248,13 @@ def plot_from_wdss2(file_path,
             idx = dts.index(closest_dt)
             file_paths.append(all_files[idx])
 
-        # Create the polar plot
-        if len(file_paths) == 2:
-            nrows,ncols = 1,2
-            figsize = (12,5)
-            fs = 10
-        elif len(file_paths) == 3:
-            nrows,ncols = 1,3
-            figsize = (12,5)
-            fs = 10
-        elif len(file_paths) == 4:
-            nrows,ncols = 2,2
-            figsize = (10,10)
-            fs = 10
-        elif len(file_paths) == 5 or len(file_paths) == 6:
-            nrows,ncols = 2,3
-            figsize = (12,8)
-            fs = 8
-        elif len(file_paths) == 7 or len(file_paths) == 8:
-            nrows,ncols = 2,4
-            figsize = (12,4)
-            fs = 8
+    if not oneplot:
+        # Determine subplot layout based on number of plots
+        if len(file_paths) == 2: nrows, ncols, figsize, fs = 1, 2, (12,5), 10
+        elif len(file_paths) == 3: nrows, ncols, figsize, fs = 1, 3, (12,5), 10
+        elif len(file_paths) == 4: nrows, ncols, figsize, fs = 2, 2, (10,10), 10
+        elif len(file_paths) in [5, 6]: nrows, ncols, figsize, fs = 2, 3, (12,8), 8
+        elif len(file_paths) in [7, 8]: nrows, ncols , figsize, fs = 2, 4, (12,4), 8
         else:
             print('Too many (or too few) variables to plot!')
             sys.exit(1)
@@ -272,8 +262,11 @@ def plot_from_wdss2(file_path,
         fig, axes = plt.subplots(figsize=figsize, nrows=nrows, ncols=ncols)#, gridspec_kw={'wspace': 0.05, 'hspace': 0.05})
         axes = axes.flat
         # Removing the initial axes...plot_radar function will configure
-        for ax in axes:
-            ax.remove()
+        for ax in axes: ax.remove()
+    else:
+        fig = plt.figure()
+        nrows, ncols = None, None
+
 
     for ii, file_path in enumerate(file_paths):
         varname = varnames[ii]
@@ -322,10 +315,11 @@ def plot_from_wdss2(file_path,
             # If all gates are within the limit, use the full data
             r_meters_limited = r_meters
             rad_masked_limited = rad_masked 
-       
+  
         # Convert the limited range to kilometers
         r_km_limited = r_meters_limited / 1000.0
-        
+   
+ 
         # Get center location, if desired
         if Xlat is not None and Xlon is not None:
             try:
@@ -338,53 +332,45 @@ def plot_from_wdss2(file_path,
             
             # Gate slicing (clamped)
             num_gates_limited = len(r_km_limited)
-            start_gate_idx = max(0, gate_idx - n_gate)
-            end_gate_idx = min(num_gates_limited, gate_idx + n_gate) # + 1) # +1 for exclusive end
+            start_gate_idx = max(0, gate_idx - n_gate_patch)
+            end_gate_idx = min(num_gates_limited, gate_idx + n_gate_patch + 1) # +1 for exclusive end
             r_to_plot = r_km_limited[start_gate_idx:end_gate_idx]
             data['rng_lower'] = r_plot_min = r_to_plot.min()
             data['rng_upper'] = r_plot_max = r_to_plot.max()
 
             # Azimuth slicing (clamped, non-wrapping)
             num_azimuths = len(theta)
-            start_az_idx = azimuth_idx - n_az 
-            end_az_idx = azimuth_idx + n_az #+ 1 
+            start_az_idx = azimuth_idx - n_az_patch 
+            end_az_idx = azimuth_idx + n_az_patch + 1 
 
             try:
-                data['az_upper'] = theta[azimuth_idx + n_az] # in degrees
+                data['az_upper'] = theta[azimuth_idx + n_az_patch] # in degrees
             except IndexError:
-                data['az_upper'] = theta[azimuth_idx + n_az - ntheta]
-            data['az_lower'] = theta[azimuth_idx - n_az] 
+                data['az_upper'] = theta[azimuth_idx + n_az_patch - ntheta]
+            data['az_lower'] = theta[azimuth_idx - n_az_patch] 
 
             if end_az_idx > num_azimuths:
                 # Indicates that we are wrapping around in DATA SPACE (not necessarily in azimuth)
-                theta_to_plot = np.concatenate([theta[start_az_idx:], theta[0:(end_az_idx-num_azimuths)]])
                 rad_to_plot = np.concatenate([
                     rad_masked_limited[start_az_idx:, start_gate_idx:end_gate_idx],
                     rad_masked_limited[0:(end_az_idx-num_azimuths), start_gate_idx:end_gate_idx]
                 ])
             elif start_az_idx < 0:
                 # Indicates that we are wrapping around in DATA SPACE (not necessarily in azimuth)
-                theta_to_plot = np.concatenate([theta[num_azimuths+start_az_idx:], theta[:end_az_idx]])
                 rad_to_plot = np.concatenate([
                     rad_masked_limited[num_azimuths+start_az_idx:, start_gate_idx:end_gate_idx],
                     rad_masked_limited[:end_az_idx, start_gate_idx:end_gate_idx]
                 ])
             else:
-                theta_to_plot = theta[start_az_idx:end_az_idx]
                 rad_to_plot = rad_masked_limited[start_az_idx:end_az_idx, start_gate_idx:end_gate_idx]
 
-            data[varname] = rad_to_plot
-            rticks = tticks = None
+            data[varname] = {'data':rad_to_plot}
+            full_ppi = False
         else:       
             # Plot the full limited range
-            data[varname] = rad_masked_limited
-            data['az_upper'] = 359.99
-            data['az_lower'] = 0
-            data['rng_upper'] = r_km_limited.max()
-            data['rng_lower'] = r_km_limited.min()
-            rticks = [75, 150, 225, 300]
-            tticks = [90, 180, 270, 360]
-
+            data[varname] = {'azimuths':theta, 'ranges':r_km_limited}
+            data[varname]['data'] = rad_masked_limited
+            full_ppi = True
 
         # Plot an X at the given location
         if Xlat is not None and Xlon is not None:
@@ -407,10 +393,7 @@ def plot_from_wdss2(file_path,
                fig=fig,
                include_cbar=True,
                include_title=False,
-               rticks=rticks,
-               tticks=tticks,
-              # n_rows=nrows,
-              # n_cols=ncols
+               full_ppi=full_ppi
     )
  
     if not oneplot:
@@ -621,9 +604,10 @@ if __name__ == "__main__":
     #target_lat, target_lon = 37.77, -99.99 #37.7922, -100.0695
 
     # Due north example
-    file_path = '/myrorss2/work/thea.sandmael/radar/20240529/KFDX/netcdf/Velocity/00.50/20240529-003956.netcdf'
-    target_lat, target_lon = 35.5278, -103.543
+    #file_path = '/myrorss2/work/thea.sandmael/radar/20240529/KFDX/netcdf/Velocity/00.50/20240529-003956.netcdf'
+    #target_lat, target_lon = 35.5278, -103.543
 
+    # Crosses due North
     file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/Velocity/00.50/20240613-223435.netcdf'
     target_lat, target_lon = 40.0899, -91.7384
 
@@ -631,7 +615,7 @@ if __name__ == "__main__":
     #file_path = '/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
     #target_lat, target_lon = 32.51, -95.91
 
-    window_size = 64, 128 #120//2, 240//2 # n_az, n_gate # these are half-sizes
+    patch_size = 64, 128 #120//2, 240//2 # n_az_patch, n_gate_patch # these are half-sizes
 
     #varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
     varname = ['Reflectivity', 'Velocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
@@ -640,7 +624,7 @@ if __name__ == "__main__":
                                  varname=varname,
                                  Xlat=target_lat,
                                  Xlon=target_lon,
-                                 window_size=window_size,
+                                 patch_size=patch_size,
                                  rangemax=300,
     )
 
