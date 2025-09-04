@@ -122,24 +122,6 @@ def plot_radar(
 
     if fig is None:
         fig = plt.figure()
-    
-    if not full_ppi: 
-        if data['az_lower'] > data['az_upper']:
-            az_lower_to_use=data['az_lower']-360
-        else:
-            az_lower_to_use=data['az_lower']
-    
-        az_min  = np.float32(az_lower_to_use) * np.pi/180
-        az_max = np.float32(data['az_upper']) * np.pi/180
-        rmin = np.float32(data['rng_lower'])
-        rmax = np.float32(data['rng_upper'])
-    
-        n_az_patch, n_rng_patch = data['Velocity']['data'].shape
-    
-        T = np.linspace(az_min,az_max,n_az_patch)
-        R = np.linspace(rmin,rmax,n_rng_patch)
-        R,T = np.meshgrid(R,T)
-
 
     for k, c in enumerate(channels):
         if n_rows is None:
@@ -165,6 +147,21 @@ def plot_radar(
             R, T = np.meshgrid(data[c]['ranges'], np.deg2rad(data[c]['azimuths']))
             im = ax.pcolormesh(T, R, data[c]['data'], shading='nearest', cmap=cmap, vmin=info['vmin'], vmax=info['vmax'])
         else:
+            if data['az_lower'] > data['az_upper']:
+                az_lower_to_use=data['az_lower']-360
+            else:
+                az_lower_to_use=data['az_lower']
+            az_min  = np.float32(az_lower_to_use) * np.pi/180
+            az_max = np.float32(data['az_upper']) * np.pi/180
+            rmin = np.float32(data['rng_lower'])
+            rmax = np.float32(data['rng_upper'])
+
+            n_az_patch, n_rng_patch = data[c]['data'].shape
+
+            T = np.linspace(az_min,az_max,n_az_patch)
+            R = np.linspace(rmin,rmax,n_rng_patch)
+            R,T = np.meshgrid(R,T)
+
             im = ax.pcolormesh(T, R-rmin, data[c]['data'], shading='nearest', cmap=cmap, vmin=info['vmin'], vmax=info['vmax'])
             ax.set_rorigin(-rmin)
             ax.set_thetalim([az_min,az_max])
@@ -634,7 +631,7 @@ if __name__ == "__main__":
     patch_size = 64, 128 #120//2, 240//2 # n_az_patch, n_gate_patch # these are half-sizes
 
     #varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    varname = ['Reflectivity', 'Velocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
+    varname = ['Reflectivity', 'AliasedVelocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
 
     fig, radar = plot_from_wdss2(file_path,
                                  varname=varname,

@@ -1,2 +1,4 @@
 torcnn/__pycache__
 torcnn/*png
+torcnn/vda/__pycache__
+torcnn/torp/__pycache__
