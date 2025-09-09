@@ -2,6 +2,7 @@ from typing import Dict, List, Any
 import xarray as xr
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy.typing import NDArray
 from datetime import datetime, timedelta
 from NWSColorMaps import NWSColorMaps
 from geopy.distance import geodesic
@@ -9,6 +10,14 @@ from geopy.point import Point
 import math
 import os,sys
 import glob
+import pyart
+import bisect
+import time
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+sys.path.append('vda')
+import dealias
+import keras
 NWScmap = NWSColorMaps()
 
 def plot_cartesian(file_path,
@@ -81,7 +90,7 @@ def plot_cartesian(file_path,
         cmap = 'bwr'; vmin=-0.006; vmax=0.006
     elif varname == 'DivShear':
         cmap = 'PiYG'; vmin=-0.006; vmax=0.006
-    elif varname == 'Velocity' or varname == 'AliasedVelocity':
+    elif varname in ['Velocity', 'AliasedVelocity', 'AliasedVelocity_vda', 'AliasedVelocity_pyart']:
         cmap = 'PiYG'; vmin=-50; vmax=50 
 
     c = ax.pcolormesh(THETA, R, rad_masked_limited, cmap=cmap, vmin=vmin, vmax=vmax)
@@ -96,6 +105,8 @@ def get_img_info(c):
     return {
         'Velocity':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
         'AliasedVelocity':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
+        'AliasedVelocity_vda':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
+        'AliasedVelocity_pyart':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
         'PhiDP':{'cmap':'gnuplot', 'vmin':0, 'vmax':360, 'units':'deg'},
         'RhoHV':{'cmap':'rainbow', 'vmin':0.45, 'vmax':1, 'units':'correlation'},
         'SpectrumWidth':{'cmap':'cubehelix', 'vmin':0, 'vmax':10, 'units':'m/s'},
@@ -105,6 +116,204 @@ def get_img_info(c):
         'Zdr':{'cmap':'Spectral_r', 'vmin':-5, 'vmax':5, 'units':'dB'},
     }.get(c,'')
 
+#-----------------------------------------------------------------------------------------------
+def dealias_velocity_vda(aliased_velocity: NDArray,
+                         unet_vda: str | dealias.VelocityDealiaser,
+                         nyq: float
+) -> NDArray[np.float32]:
+
+    """
+    Dealiases 2D velocity data. Amended from https://github.com/mit-ll/unet-vda/blob/main/Unet-VDA-Demo.ipynb
+  
+    Args:
+        - aliased_velocity (2D np.ndarray); the polar data
+        - unet_vda (str or dealias.VelocityDealiaser); the model or model filename
+        - nyq (float); the nyquist velocity
+    Returns:
+        - dvel (np.ndarray of float32); dealiased velocity
+    """
+
+    # Load the model
+    if isinstance(unet_vda, str):
+        unet_vda = keras.models.load_model(unet_vda, compile=False)
+    
+    # Reshape nyquist velocity and velocity to conform to the model    
+    nyq = np.array(np.float32(nyq)).reshape(1,)
+    avel = np.expand_dims(aliased_velocity, axis=(0,-1))
+
+    n_frames = 1
+    
+    # Add batch dim
+    avel = avel[None,...]
+    nyq = nyq[None,...]
+   
+    # Pad data 24 gates on top bound to get proper size 
+    pad_gate = 24
+    avel = np.concatenate( (avel,
+                            avel[:,:,:,:pad_gate,:]),
+                           axis=3
+    )
+ 
+    # Split 0.5 degree data into two 1 degree arrays
+    s = avel.shape
+    avel = np.reshape(avel,(s[0],s[1],s[2]//2,2,s[3],s[4]))
+    avel = np.transpose(avel,(0,3,1,2,4,5))
+    avel = np.reshape(avel, (2*s[0],s[1],s[2]//2,s[3],s[4]))
+    nyq=np.stack((nyq,nyq))
+    nyq=np.transpose(nyq,(1,0,2))
+    nyq=np.reshape(nyq,(-1,n_frames,1))
+   
+    # Pad data 12 degrees on either side with periodic boundary conditions
+    pad_deg = 12
+    avel = np.concatenate( (avel[:,:,-pad_deg:,:,:],
+                            avel,
+                            avel[:,:,:pad_deg,:,:]),
+                           axis=2
+    )
+    
+    # Replace bad values with NAN
+    avel[avel <= -64] = np.nan
+    
+    # Run UNet
+    inp = {'vel':avel,'nyq':nyq}
+    out=unet_vda.predict(inp)
+    dvel=out['dealiased_vel'].copy()
+    
+    ## Post process
+    # Recombine to 0.5 degree
+    s=dvel.shape
+    dvel = np.reshape(dvel,(s[0]//2,2,s[1],s[2],s[3]))
+    dvel = np.transpose(dvel,(0,2,1,3,4))
+    dvel = np.reshape(dvel,(s[0]//2,-1,s[2],s[3]))
+    
+    # remove padding
+    dvel = dvel[0, 24:-24, 0:-24, 0]
+    
+    return dvel
+
+#-----------------------------------------------------------------------------------------------
+def find_raw_file(filename):
+    """
+    Finds the corresponding NEXRAD L2 raw filename.
+    Assumes a certain directory structure.
+
+    Args:
+        - filename (str): the WDSS2 netcdf full filename
+    Returns:
+        - raw_filename (str): the NEXRAD L2 raw filename
+    """
+
+    raddt = datetime.strptime(os.path.basename(filename)[0:15], '%Y%m%d-%H%M%S')
+
+    all_raw_files = np.sort(glob.glob(os.path.dirname( os.path.dirname( os.path.dirname( os.path.dirname(filename)))) + '/raw/*'))
+    all_dts = [datetime.strptime(os.path.basename(raw_file)[4:18], '%Y%m%d_%H%M%S')  for raw_file in all_raw_files]
+
+    i = bisect.bisect_right(all_dts, raddt)
+
+    if i > 0:
+        return all_raw_files[i-1]
+    else:
+        return all_raw_files[i]
+
+#-----------------------------------------------------------------------------------------------
+def dealias_velocity_pyart(raddt,
+                           tilt=0.5,
+                           file_path=None,
+                           radar=None,
+                           n_gates=-1,
+                           rf_mask=None,
+):
+    """
+    Using a pyart radar object or a file_path, dealias doppler velocity
+    data and return the numpy array. Assumes that only one of file_path
+    and radar are not None.
+
+    Args:
+      - raddt (datetime.datetime): use the tilt closest (but before) this time
+      - tilt (float): use the tilt closest to this value (in degrees)
+      - file_path (str): Full path to WDSS2 netcdf. Will use this to find
+                         the correct/corresponding raw NEXRAD file.
+      - radar (pyart.core.Radar): Object with all of the NEXRAD data that is needed.
+      - n_gates (int): The number of gates to use (i.e., the index of the end gate)
+      - rf_mask (np.ndarray dtype=bool): The mask for the range-folded resolution volumes 
+    Returns:
+      - dvel (np.ma.MaskedArray): A 2D array in polar coords; the dealiased velocity data
+    """
+
+    if file_path is not None:
+        raw_file = find_raw_file(filename=file_path)
+        radar = pyart.io.read_nexrad_archive(raw_file)
+
+    # Find inds of all tilts close to tilt
+    tilts = radar.fixed_angle['data']
+    ind = np.where(np.abs(tilts - tilt) < 0.05)
+
+    # Now find the closest in time without going over
+    ## Get the arrays of start and end indices for each sweep
+    start_indices = radar.sweep_start_ray_index['data']
+    end_indices = radar.sweep_end_ray_index['data']
+    
+    ## Get the array of all ray timestamps (in seconds since a reference time)
+    all_ray_timestamps = radar.time['data']
+    
+    ## Get the reference time (often the start of the scan)
+    time_reference = radar.time['units']
+    
+    ## Loop through selected tilts to get start times
+    sweep_times = []
+    for i in ind[0]:
+        start_index = start_indices[i]
+        ## Get the timestamp of the first ray in the sweep
+        sweep_start_timestamp_seconds = all_ray_timestamps[start_index]
+        ## You can convert this to a datetime object for readability
+        ## Py-ART's `datetimes_from_radar` utility is great for this
+        sweep_start_datetime = pyart.util.datetimes_from_radar(radar)[start_index]
+        sweep_times.append(sweep_start_datetime)
+
+    ## Closest tilt ind, i (usually)
+    tilt_ind = ind[0][bisect.bisect_right(sweep_times, raddt)]
+    
+    # Define the gate filter on the single sweep/tilt 
+    radar_sweep = radar.extract_sweeps([tilt_ind])
+
+    # Check that velocity is valid here
+    velocity_data = radar_sweep.fields['velocity']['data']
+    if np.ma.count(velocity_data) == 0:
+        raise ValueError('np.ma.count(velocity_data) = 0. Bad data.')
+        return -1
+
+    # Filters, if desired
+    gatefilter = pyart.filters.GateFilter(radar_sweep)
+    # Exclude gates with low reflectivity
+    if 'reflectivity' in radar_sweep.fields:
+        gatefilter.exclude_below('reflectivity', 5.0)
+    # Exclude gates with low cross-correlation coefficient
+    #if 'cross_correlation_ratio' in radar_sweep.fields:
+    #    cc_data = radar_sweep.fields['cross_correlation_ratio']['data']
+    #    if np.ma.count(cc_data) > 0:
+    #        gatefilter.exclude_below('cross_correlation_ratio', 0.85)
+
+    # Use highest nyquist velocity. We're assuming that's the correct one for dealiasing when using split-cut scanning
+    nyq = np.max(radar_sweep.instrument_parameters['nyquist_velocity']['data'])
+
+    raddict = pyart.correct.dealias_region_based(
+        radar_sweep,
+        vel_field='velocity',
+        nyquist_vel=nyq,
+        gatefilter=gatefilter,
+        centered=True
+    )
+    rad_masked = raddict['data']
+    # Only use the n_gates we want
+    if n_gates > 0:
+        rad_masked = rad_masked[:,0:n_gates]
+    # Reset the masked regions to 0
+    rad_masked[rad_masked.mask] = 0
+    # Apply the rf_mask
+    if rf_mask is not None:
+        rad_masked = np.where(rf_mask, np.nan, rad_masked)
+
+    return rad_masked
 #-----------------------------------------------------------------------------------------------
 def plot_radar(
         data: Dict[str,Any],
@@ -140,7 +349,7 @@ def plot_radar(
             cmap = plt.get_cmap(cmap)
         if c in ['Reflectivity', 'Zdr', 'RhoHV', 'PhiDP']:
             cmap.set_bad(color='white') 
-        elif c in ['Velocity', 'AliasedVelocity', 'SpectrumWidth', 'AzShear', 'DivShear']:
+        elif c in ['Velocity', 'AliasedVelocity', 'AliasedVelocity_vda', 'AliasedVelocity_pyart', 'SpectrumWidth', 'AzShear', 'DivShear']:
             cmap.set_bad(color='purple')
 
         if full_ppi:
@@ -202,10 +411,15 @@ def plot_radar(
         ax.grid(linestyle=":", color='black')
  
         if include_cbar:
-            fig.colorbar(im,location='right',shrink=.65,label=f"{c} [{info['units']}]")
+            if c == 'AliasedVelocity_pyart':
+                clab = 'Velocity_pyart'
+            elif c == 'AliasedVelocity_vda':
+                clab = 'Velocity_vda'
+            else:
+                clab = c
+            fig.colorbar(im,location='right',shrink=.65,label=f"{clab} [{info['units']}]")
         if include_title:
             ax.set_title(c)
-
 
 #-----------------------------------------------------------------------------------------------
 def plot_from_wdss2(file_path,
@@ -214,6 +428,7 @@ def plot_from_wdss2(file_path,
                     Xlat=None,
                     Xlon=None,
                     patch_size=None,
+                    dealias_model=None,
 ):
     """
     Plots a PPI from WDSS2-decoded netcdfs.
@@ -224,6 +439,7 @@ def plot_from_wdss2(file_path,
     - Xlat (float or None): An optional latitude to plot
     - Xlon (float or None): An optional longitude to plot
     - patch_size tuple (int, int): +/- grid points from Xlat/Xlon grid point in polar coordinates for segment plot 
+    - dealias_model (str or dealias.VelocityDealiaser): use this model to dealias velocity
     """
 
     if patch_size:
@@ -232,6 +448,8 @@ def plot_from_wdss2(file_path,
         n_az_patch, n_gate_patch = None, None
 
     data = {}
+
+    raddt = datetime.strptime(os.path.basename(file_path), '%Y%m%d-%H%M%S.netcdf')
 
     if isinstance(varname, str):
         varnames = [varname]
@@ -242,12 +460,14 @@ def plot_from_wdss2(file_path,
         oneplot = False
         varnames = varname
         tilt = os.path.basename(os.path.dirname(file_path))
-        raddt = datetime.strptime(os.path.basename(file_path), '%Y%m%d-%H%M%S.netcdf')
         rootdir = os.path.dirname(os.path.dirname(os.path.dirname(file_path)))   
       
         # Find closest files
         file_paths = []
         for vname in varnames:
+            if vname in ['AliasedVelocity_pyart', 'AliasedVelocity_vda']:
+                vname = 'AliasedVelocity'
+
             all_files = glob.glob(f"{rootdir}/{vname}/{tilt}/*netcdf")
             dts = [datetime.strptime(os.path.basename(ff), '%Y%m%d-%H%M%S.netcdf') for ff in all_files]
             closest_dt = min(dts, key=lambda dt: abs(raddt - dt))
@@ -280,14 +500,20 @@ def plot_from_wdss2(file_path,
     for ii, file_path in enumerate(file_paths):
         varname = varnames[ii]
 
+        if varname in ['AliasedVelocity_pyart', 'AliasedVelocity_vda']:
+            vname = 'AliasedVelocity'
+        else:
+            vname = varname
+
         # Open the netCDF file using xarray
         ds = xr.open_dataset(file_path)
         
-        raddata = ds[varname].values
+        raddata = ds[vname].values
         azimuth = ds['Azimuth'].values
         gate_width = ds['GateWidth'].values.mean() # Assuming GateWidth is relatively constant
         range_to_first_gate = ds.attrs['RangeToFirstGate']
         radar_name = ds.attrs['radarName-value'] 
+        nyq = np.float32(ds.attrs['Nyquist_Vel-value'])
 
         # Calculate radial distances (r) for each gate
         # The 'Gate' dimension represents the index of the gate, not the actual distance.
@@ -311,10 +537,22 @@ def plot_from_wdss2(file_path,
         # Replace missing values with NaN for plotting
         if varname in ['Reflectivity', 'Zdr', 'RhoHV', 'PhiDP']:
             rad_masked = np.where(raddata == missing_data_value, np.nan, raddata)
-        elif varname in ['Velocity', 'AliasedVelocity', 'SpectrumWidth', 'AzShear', 'DivShear']:
+        elif varname in ['Velocity', 'AliasedVelocity', 'AliasedVelocity_pyart', 'AliasedVelocity_vda', 'SpectrumWidth', 'AzShear', 'DivShear']:
             rad_masked = np.where(raddata == missing_data_value, 0, raddata)
-            rad_masked = np.where(rad_masked == range_folded_value, np.nan, rad_masked)
-      
+            rf_mask = (rad_masked == range_folded_value)
+            rad_masked = np.where(rf_mask, np.nan, rad_masked)
+            n_azimuths, n_gates = rad_masked.shape
+          
+        if varname == 'AliasedVelocity_vda':
+            # Dealias velocity with AI model
+            rad_masked = dealias_velocity_vda(rad_masked, dealias_model, nyq) 
+        elif varname == 'AliasedVelocity_pyart':
+            try:
+                rad_masked = dealias_velocity_pyart(raddt, file_path=file_path, n_gates=n_gates, rf_mask=rf_mask)
+            except ValueError as err:
+                print(str(err)) 
+                sys.exit(1)
+
  
         # Find the index where the range exceeds the limit
         max_range_index = np.where(r_meters > rangemax * 1000)[0] # Convert km to meters for comparison
@@ -346,7 +584,7 @@ def plot_from_wdss2(file_path,
             # Gate slicing (clamped)
             num_gates_limited = len(r_km_limited)
             start_gate_idx = max(0, gate_idx - n_gate_patch)
-            end_gate_idx = min(num_gates_limited, gate_idx + n_gate_patch + 1) # +1 for exclusive end
+            end_gate_idx = min(num_gates_limited, gate_idx + n_gate_patch)# + 1) # +1 for exclusive end
             r_to_plot = r_km_limited[start_gate_idx:end_gate_idx]
             data['rng_lower'] = r_plot_min = r_to_plot.min()
             data['rng_upper'] = r_plot_max = r_to_plot.max()
@@ -354,7 +592,7 @@ def plot_from_wdss2(file_path,
             # Azimuth slicing (clamped, non-wrapping)
             num_azimuths = len(theta)
             start_az_idx = azimuth_idx - n_az_patch 
-            end_az_idx = azimuth_idx + n_az_patch + 1 
+            end_az_idx = azimuth_idx + n_az_patch #+ 1 
 
             try:
                 data['az_upper'] = theta[azimuth_idx + n_az_patch] # in degrees
@@ -601,8 +839,8 @@ if __name__ == "__main__":
     #target_lat, target_lon = 42.4988, -97.0407
 
     # 166 km away example
-    #file_path = '/myrorss2/data/thea.sandmael/data/radar/20151223/KNQA/netcdf/Velocity/00.50/20151223-205557.netcdf'
-    #target_lat, target_lon = 34, -90.71
+    file_path = '/myrorss2/data/thea.sandmael/data/radar/20151223/KNQA/netcdf/Velocity/00.50/20151223-205557.netcdf'
+    target_lat, target_lon = 34, -90.71
 
     # Wisconsin example
     #file_path = '/myrorss2/work/thea.sandmael/radar/20240522/KARX/netcdf/Velocity/00.50/20240522-002936.netcdf'
@@ -621,8 +859,8 @@ if __name__ == "__main__":
     #target_lat, target_lon = 35.5278, -103.543
 
     # Crosses due North
-    file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/Velocity/00.50/20240613-223435.netcdf'
-    target_lat, target_lon = 40.0899, -91.7384
+    #file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/Velocity/00.50/20240613-223435.netcdf'
+    #target_lat, target_lon = 40.0899, -91.7384
 
     # EF4 example (KFWS)
     #file_path = '/myrorss2/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
@@ -631,14 +869,15 @@ if __name__ == "__main__":
     patch_size = 64, 128 #120//2, 240//2 # n_az_patch, n_gate_patch # these are half-sizes
 
     #varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    varname = ['Reflectivity', 'AliasedVelocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
-
+    varname = ['AliasedVelocity', 'AliasedVelocity_pyart', 'Velocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
+    
     fig, radar = plot_from_wdss2(file_path,
                                  varname=varname,
                                  Xlat=target_lat,
                                  Xlon=target_lon,
                                  patch_size=patch_size,
                                  rangemax=300,
+                              #   dealias_model='vda/dealias_sn16_csi9764.keras',
     )
 
     if isinstance(varname, str):
