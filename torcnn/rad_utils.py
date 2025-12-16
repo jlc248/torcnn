@@ -19,7 +19,81 @@ sys.path.append('vda')
 import dealias
 import keras
 NWScmap = NWSColorMaps()
+import xml.etree.ElementTree as ET
+import pandas as pd
+import geopandas as gpd
+from typing import Dict, Any, Union, TypeAlias
 
+# Define a Type Alias for the dictionary structure
+# Values will be strings, integers, or floats after casting.
+RadarDetails: TypeAlias = Dict[str, Union[str, int, float]]
+
+def parse_radar_xml(xml_file_path: str, geodataframe: bool = False) -> Union[Dict[str, RadarDetails], gpd.GeoDataFrame]:
+    """
+    Parses an XML file containing radar data and returns a dictionary
+    where the key is the radar name and the value is a nested dictionary
+    of all its attributes (including location).
+
+    Args:
+        xml_file_path: The path to the XML file to parse.
+        geodataframe: Return result as a geodataframe with Points
+
+    Returns:
+        A dictionary structured as {radar_name: {attribute: value, ...}}.
+    """
+    radar_data = {}
+
+    try:
+        # 1. Parse the XML file
+        tree = ET.parse(xml_file_path)
+        root = tree.getroot()
+
+        # 2. Iterate over all <radar> elements
+        for radar_element in root.findall('radar'):
+
+            # Extract all attributes from the <radar> tag
+            attributes = radar_element.attrib
+
+            # The 'name' attribute is the key for the top-level dictionary
+            radar_name = attributes.pop('name', None)
+
+            if not radar_name:
+                print(f"Warning: Found a radar element without a 'name' attribute. Skipping.")
+                continue
+
+            # Start the nested dictionary with the radar attributes
+            nested_dict = attributes.copy()
+
+            # 3. Find the nested <location> element
+            location_element = radar_element.find('location')
+            if location_element is not None:
+                # Add location attributes (lat, lon, ht) to the nested dictionary
+                nested_dict.update(location_element.attrib)
+
+            # 4. Store the result in the main dictionary
+            radar_data[radar_name] = nested_dict
+
+        if geodataframe:
+            # 'orient="index"' tells pandas to use the dictionary keys as the index (row labels)
+            radars = pd.DataFrame.from_dict(radar_data, orient='index')
+            # Reset the index to turn the keys into a column
+            radars = radars.reset_index().rename(columns={'index': 'id'})
+            # Create shapely Point objects.
+            geometry = [Point(xy) for xy in zip(radars['lon'], radars['lat'])]
+            # WGS 84 (EPSG:4326) is the standard for latitude/longitude coordinates.
+            crs = "EPSG:4326"
+            # Create the GeoDataFrame
+            radar_data = gpd.GeoDataFrame(radars, crs=crs, geometry=geometry)
+
+    except FileNotFoundError:
+        print(f"Error: The file '{xml_file_path}' was not found.")
+    except ET.ParseError as e:
+        print(f"Error parsing XML file: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+    return radar_data
+#-----------------------------------------------------------------------------------------------
 def plot_cartesian(file_path,
                    varname,
                    rangemax=300,
@@ -624,9 +698,9 @@ def plot_from_wdss2(file_path,
             full_ppi = True
 
         # Plot an X at the given location
-        if Xlat is not None and Xlon is not None:
+     #   if Xlat is not None and Xlon is not None:
             #ax.plot(calc_az_rad, calc_range, markersize=15, marker='o', markeredgewidth=3,  markerfacecolor='none', color='black')
-            if oneplot: ax.plot(calc_az_rad, calc_range, markersize=15, marker='o', markeredgewidth=3,  markerfacecolor='none', color='black')
+     #       if oneplot: ax.plot(calc_az_rad, calc_range, markersize=15, marker='o', markeredgewidth=3,  markerfacecolor='none', color='black')
 
         # Set title
         scan_time = ds.attrs['Time']
@@ -839,8 +913,8 @@ if __name__ == "__main__":
     #target_lat, target_lon = 42.4988, -97.0407
 
     # 166 km away example
-    file_path = '/myrorss2/data/thea.sandmael/data/radar/20151223/KNQA/netcdf/Velocity/00.50/20151223-205557.netcdf'
-    target_lat, target_lon = 34, -90.71
+    #file_path = '/myrorss2/data/thea.sandmael/data/radar/20151223/KNQA/netcdf/Velocity/00.50/20151223-205557.netcdf'
+    #target_lat, target_lon = 34, -90.71
 
     # Wisconsin example
     #file_path = '/myrorss2/work/thea.sandmael/radar/20240522/KARX/netcdf/Velocity/00.50/20240522-002936.netcdf'
@@ -859,8 +933,8 @@ if __name__ == "__main__":
     #target_lat, target_lon = 35.5278, -103.543
 
     # Crosses due North
-    #file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/Velocity/00.50/20240613-223435.netcdf'
-    #target_lat, target_lon = 40.0899, -91.7384
+    file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/AliasedVelocity/00.50/20240613-223435.netcdf'
+    target_lat, target_lon = 40.0899, -91.7384
 
     # EF4 example (KFWS)
     #file_path = '/myrorss2/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
@@ -870,7 +944,8 @@ if __name__ == "__main__":
 
     #varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
     varname = ['AliasedVelocity', 'AliasedVelocity_pyart', 'Velocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
-    
+    varname = 'AliasedVelocity_pyart'    
+
     fig, radar = plot_from_wdss2(file_path,
                                  varname=varname,
                                  Xlat=target_lat,

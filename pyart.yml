@@ -1,0 +1,38 @@
+name: pyart 
+channels:
+- conda-forge
+- defaults
+dependencies:
+- python=3.13 # for pyart
+- tensorflow
+- zarr
+- lightgbm
+- pyresample
+- cython
+- pygrib
+- h5py
+- hdf5
+- netcdf4
+- arm_pyart  
+- numpy
+- pytables
+- pandas
+- xarray
+- scikit-learn
+- scikit-image
+- imageio
+- scipy
+- matplotlib
+- pyproj
+- proj
+- shapely
+- shap
+- geojson
+- pip
+- cartopy
+- geopandas
+- pip:
+  - tqdm
+  - mysql.connector
+  - satpy
+  - geopy
