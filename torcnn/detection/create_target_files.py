@@ -15,7 +15,7 @@ def latlon_to_yolo_label(
     obj_lat: float,
     obj_lon: float,
     image_shape: tuple[int, int] = (512,512),
-    physical_lengths_in_km: tuple[float, float] = (160, 160),
+    physical_lengths_in_km: tuple[float, float] = (320, 320),
     obj_box_size_in_km: tuple[int, int] = (10, 10),
     class_index: int = 0,
 ) -> str:
@@ -65,6 +65,10 @@ def latlon_to_yolo_label(
     X_pixel = np.round((X_obj_m + L2 / 2) / R2).astype(int)
     Y_pixel = np.round((L1 / 2 - Y_obj_m) / R1).astype(int) # This is inverted so that (0,0) is NW corner of image.
 
+    # Clamp to ensure coordinates are within the array bounds [0, image_size - 1]
+    X_pixel = np.clip(X_pixel, 0, image_shape[1] - 1)
+    Y_pixel = np.clip(Y_pixel, 0, image_shape[0] - 1)
+
     # Convert Pixel Centroid to YOLO Normalized Format
     ## Normalize centroid (x_center, y_center)
     x_center_norm = X_pixel / image_shape[1]
@@ -73,8 +77,8 @@ def latlon_to_yolo_label(
     ## Normalize width and height
     obj_box_size_m_Y, obj_box_size_m_X = obj_box_size_in_km[0] * 1000.0, obj_box_size_in_km[1] * 1000.0
     
-    w_norm = obj_box_size_m_Y / L2
-    h_norm = obj_box_size_m_X / L1
+    w_norm = obj_box_size_m_X / L2
+    h_norm = obj_box_size_m_Y / L1
    
     # Format the output as a string with high precision for coordinates
     yolo_label = f"{class_index} {x_center_norm:.6f} {y_center_norm:.6f} {w_norm:.6f} {h_norm:.6f}"
@@ -86,10 +90,12 @@ def latlon_to_yolo_label(
 # Shape of the NEXRAD data when remapped to Cartesian coords
 image_shape = (512, 512)
 
-datadir1 = '/myrorss2/work/thea.sandmael/radar' # 2019-2024
-datadir2 = '/myrorss2/data/thea.sandmael/data/radar' # 2011-2018
+#datadir1 = '/myrorss2/work/thea.sandmael/radar' # 2019-2024
+#datadir2 = '/myrorss2/data/thea.sandmael/data/radar' # 2011-2018
 
 input_csv = '/raid/jcintineo/torcnn/torp_datasets/2024_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv'
+
+outpatt = '/raid/jcintineo/torcnn/detection/truth_files/%Y/%Y%m%d/{radar}_%Y%m%d-%H%M%S.txt'
 
 # Read radar xml
 rad_dict = rad_utils.parse_radar_xml('../static/radarinfo.xml')
@@ -99,18 +105,21 @@ df = pd.read_csv(input_csv)
 # For each TORP detect, add location to truth files
 for row in df.itertuples(index=False):
 
-    lat = row.latitudeExtractCenter
-    lon = row.longitudeExtractCenter
-    radar = row.radar
+    if row.tornado > 0: # For tornado detects only
+        lat = row.latitudeExtractCenter
+        lon = row.longitudeExtractCenter
+        radar = row.radar
+        dt = datetime.strptime(row.radarTimestamp,'%Y%m%d-%H%M%S')
 
-    t0=time.time()
-    print(radar, lat, lon, row.radarTimestamp)
-    sss = latlon_to_yolo_label(rad_dict[radar]['lat'],
-                               rad_dict[radar]['lon'],
-                               lat,
-                               lon,
-                               image_shape=image_shape,
-    ) 
-    print(time.time()-t0)
-    print(sss)
-    sys.exit()
+        print(radar, lat, lon, row.radarTimestamp)
+        label = latlon_to_yolo_label(rad_dict[radar]['lat'],
+                                   rad_dict[radar]['lon'],
+                                   lat,
+                                   lon,
+                                   image_shape=image_shape,
+        ) 
+      
+        outfile = dt.strftime(outpatt.replace('{radar}', radar))
+        os.makedirs(os.path.dirname(outfile), exist_ok=True)
+        with open(outfile, 'a') as f:
+            f.write(label + '\n')
