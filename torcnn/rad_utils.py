@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import geopandas as gpd
 from typing import Dict, Any, Union, TypeAlias
+from netCDF4 import num2date
 
 # Define a Type Alias for the dictionary structure
 # Values will be strings, integers, or floats after casting.
@@ -288,6 +289,92 @@ def find_raw_file(filename):
         return all_raw_files[i-1]
     else:
         return all_raw_files[i]
+
+#-----------------------------------------------------------------------------------------------
+
+def get_remapped_radar_data(raw_file, raddt, target_tilt=0.5, 
+                             fields=['reflectivity', 'velocity', 'spectrum_width', 
+                                     'differential_reflectivity', 'cross_correlation_ratio'],
+                             x_limits=(-160000.0, 160000.0), 
+                             y_limits=(-160000.0, 160000.0),
+                             grid_shape=(512, 512)):
+    
+    # Read Radar
+    radar = pyart.io.read_nexrad_archive(raw_file)
+    
+    # Optimized Time Selection (Avoids full datetime array creation)
+    tilts = radar.fixed_angle['data']
+    all_indices = np.where(np.abs(tilts - target_tilt) < 0.1)[0]
+    
+    if len(all_indices) == 0:
+        raise ValueError(f"No tilts found near {target_tilt}")
+
+    time_units = radar.time['units']
+    # Just get the start time for the target tilt sweeps
+    sweep_start_times = []
+    for idx in all_indices:
+        t_val = radar.time['data'][radar.sweep_start_ray_index['data'][idx]]
+        sweep_start_times.append(num2date(t_val, time_units))
+
+    idx_pos = bisect.bisect_right(sweep_start_times, raddt)
+    base_idx = all_indices[max(0, idx_pos - 1)]
+
+    # Combine Split-Cuts (Surveillance + Doppler)
+    indices = [base_idx]
+    for n in [base_idx - 1, base_idx + 1]:
+        if 0 <= n < radar.nsweeps and np.abs(radar.fixed_angle['data'][n] - target_tilt) < 0.1:
+            indices.append(n)
+    radar_at_tilt = radar.extract_sweeps(list(set(indices)))
+
+    # Note that this takes a lot of time to run 
+    if 'specific_differential_phase' in fields and 'differential_phase' in radar_at_tilt.fields:
+        try:
+            kdp_dict, _, _ = pyart.retrieve.kdp_schneebeli(
+                radar_at_tilt, 
+                kdp_field='differential_reflectivity',
+                band='S',
+                fill_value=-99
+            )
+            radar_at_tilt.add_field('specific_differential_phase', kdp_dict, replace_existing=True)
+        except Exception as e:
+            print(f"KDP failed: {e}")
+
+    # Build list of fields that actually exist
+    available = radar_at_tilt.fields.keys()
+    fields_to_map = [f for f in fields if f in available and f != 'velocity']
+
+    # Dealiasing & RF Mask
+    if 'velocity' in radar_at_tilt.fields:
+        gatefilter = pyart.filters.GateFilter(radar_at_tilt)
+        if 'reflectivity' in radar_at_tilt.fields:
+            gatefilter.exclude_below('reflectivity', 5.0)
+        
+        nyq = np.max(radar_at_tilt.instrument_parameters['nyquist_velocity']['data'])
+        dealiased_vel = pyart.correct.dealias_region_based(
+            radar_at_tilt, nyquist_vel=nyq, gatefilter=gatefilter, 
+            centered=True,
+        )
+        radar_at_tilt.add_field('dealiased_velocity', dealiased_vel)
+        fields_to_map.append('dealiased_velocity')
+
+    # Remapping (The most CPU intensive part)
+    grid = pyart.map.grid_from_radars(
+        (radar_at_tilt,), 
+        grid_shape=(1, grid_shape[0], grid_shape[1]), 
+        grid_limits=((0, 1000), y_limits, x_limits), 
+        fields=fields_to_map
+    )
+
+    # Output Dictionary with NW Origin
+    output = {}
+    for f in fields_to_map:
+        if f in grid.fields:
+            # Step-reversing slice on Y-axis to make North = index 0
+            data = grid.fields[f]['data'][0, ::-1, :]
+            
+            output[f] = np.ma.filled(data, fill_value=np.nan)
+
+    return output
 
 #-----------------------------------------------------------------------------------------------
 def dealias_velocity_pyart(raddt,
