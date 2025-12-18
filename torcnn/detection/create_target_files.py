@@ -95,7 +95,7 @@ image_shape = (512, 512)
 
 input_csv = '/raid/jcintineo/torcnn/torp_datasets/2024_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv'
 
-outpatt = '/raid/jcintineo/torcnn/detection/truth_files/%Y/%Y%m%d/{type}/{radar}_%Y%m%d-%H%M%S.txt'
+outpatt = '/raid/jcintineo/torcnn/detection/truth_files/%Y/%Y%m%d/{radar}_%Y%m%d-%H%M%S.txt'
 
 # Read radar xml
 rad_dict = rad_utils.parse_radar_xml('../static/radarinfo.xml')
@@ -106,27 +106,31 @@ df = pd.read_csv(input_csv)
 for row in df.itertuples(index=False):
 
     radar = row.radar
+
+    if row.radar[0] != 'K':
+        continue
+
     dt = datetime.strptime(row.radarTimestamp,'%Y%m%d-%H%M%S')
 
-    if row.tornado > 0: 
-        lat = row.latitudeExtractCenter
-        lon = row.longitudeExtractCenter
+    lat = row.latitudeExtractCenter
+    lon = row.longitudeExtractCenter
 
-        #print(radar, lat, lon, row.radarTimestamp)
-        label = latlon_to_yolo_label(rad_dict[radar]['lat'],
-                                   rad_dict[radar]['lon'],
-                                   lat,
-                                   lon,
-                                   image_shape=image_shape,
-        ) 
-      
-        outfile = dt.strftime(outpatt.replace('{radar}', radar).replace('{type}','tor'))
-
+    if row.tornado > 0 and row.spout == 0: # exclude spouts for now 
+        class_index = 0
+    elif row.tornado == 0: # nontor
+        class_index = 1
     else:
-        # Make an empty file
-        label = ''
-        outfile = dt.strftime(outpatt.replace('{radar}', radar).replace('{type}','nontor'))
-
+        continue
+        
+    label = latlon_to_yolo_label(rad_dict[radar]['lat'],
+                               rad_dict[radar]['lon'],
+                               lat,
+                               lon,
+                               image_shape=image_shape,
+                               class_index=class_index
+    ) 
+    
+    outfile = dt.strftime(outpatt.replace('{radar}', radar))
     os.makedirs(os.path.dirname(outfile), exist_ok=True)
     with open(outfile, 'a') as f:
         f.write(label + '\n')
