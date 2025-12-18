@@ -20,9 +20,9 @@ def find_nearest(array, value):
     return idx, array[idx]
 
 #----------------------------------------------------------------------------------------------------
-def bytescale(data_arr, vmin, vmax, min_byte_val=0, max_byte_val=255):
+def bytescale(data_arr, vmin, vmax, min_byte_val=0, max_byte_val=255, dtype=np.uint8):
     """
-    Scales a data array to a specified byte range.
+    Scales a data array to a specified range.
 
     Args:
         data_arr (np.ndarray): The input data array to be scaled.
@@ -30,9 +30,10 @@ def bytescale(data_arr, vmin, vmax, min_byte_val=0, max_byte_val=255):
         vmax (float): The maximum value of the original data range.
         min_byte_val (int, optional): The minimum byte value for the scaled output. Defaults to 0.
         max_byte_val (int, optional): The maximum byte value for the scaled output. Defaults to 255.
+        dtype (numpy datatype, optional): The data type. Could do np.float16, e.g., if you scale from -1 to 1.
 
     Returns:
-        np.ndarray: The bytescaled array as np.uint8.
+        np.ndarray: The scaled array as dtype
     """
     assert(vmin < vmax)
     assert(min_byte_val < max_byte_val)
@@ -43,13 +44,15 @@ def bytescale(data_arr, vmin, vmax, min_byte_val=0, max_byte_val=255):
     # Scale the data to the new byte range
     # First, normalize the data to 0-1 range based on vmin/vmax
     # Then, scale to the desired byte_range and shift by min_byte_val
-    DataImage = np.round(((data_arr - vmin) / (vmax - vmin)) * byte_range + min_byte_val)
+    DataImage = ((data_arr - vmin) / (vmax - vmin)) * byte_range + min_byte_val
+    if dtype == np.uint8:
+        DataImage = np.round(DataImage)
 
     # Clip values to ensure they stay within the specified byte range
     DataImage[DataImage < min_byte_val] = min_byte_val
     DataImage[DataImage > max_byte_val] = max_byte_val
 
-    return DataImage.astype(np.uint8)
+    return DataImage.astype(dtype)
 
 #----------------------------------------------------------------------------------------------------
 def unbytescale(scaled_arr, vmin, vmax, min_byte_val=0, max_byte_val=255):
