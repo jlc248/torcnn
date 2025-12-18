@@ -102,6 +102,9 @@ rad_dict = rad_utils.parse_radar_xml('../static/radarinfo.xml')
 
 df = pd.read_csv(input_csv)
 
+# Container to hold labels. We use this to check if a label was alredy written.
+all_rad_dt_dict = {}
+
 # For each TORP detect, add location to truth files
 for row in df.itertuples(index=False):
 
@@ -129,8 +132,19 @@ for row in df.itertuples(index=False):
                                image_shape=image_shape,
                                class_index=class_index
     ) 
+
+    write_line = False
+    key = f"{radar}{dt.strftime('%Y%m%d-%H%M%S')}"
+    if key in all_rad_dt_dict:
+        if label not in all_rad_dt_dict[key]:
+            all_rad_dt_dict[key].append(label)
+            write_line = True
+    else:
+        all_rad_dt_dict[key] = [label]
+        write_line = True
     
-    outfile = dt.strftime(outpatt.replace('{radar}', radar))
-    os.makedirs(os.path.dirname(outfile), exist_ok=True)
-    with open(outfile, 'a') as f:
-        f.write(label + '\n')
+    if write_line:
+        outfile = dt.strftime(outpatt.replace('{radar}', radar))
+        os.makedirs(os.path.dirname(outfile), exist_ok=True)
+        with open(outfile, 'a') as f:
+            f.write(label + '\n')
