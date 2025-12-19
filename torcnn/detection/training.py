@@ -21,6 +21,58 @@ else:
 AUTOTUNE=tf.data.AUTOTUNE
 #BUFFER_SIZE = 16 * 1024**2 # 16MB
 #------------------------------------------------------------------------------------------
+class RadarMonitor(tf.keras.callbacks.Callback):
+    def __init__(self, thresholds):
+        super().__init__()
+        self.thresholds = thresholds
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        print(f"\n\n{'='*40}")
+        print(f" EPOCH {epoch + 1} RADAR PERFORMANCE REPORT")
+        print(f"{'='*40}")
+        
+        # 1. Overall Loss
+        print(f" TOTAL LOSS: {logs.get('val_loss', 0):.4f}")
+        print("-" * 40)
+        
+        # 2. Objectness (Finding the rotation)
+        print(f" [OBJECT DETECTION]")
+        for tt in self.thresholds:
+            pod = round(logs.get(f'val_obj_pod_{tt}', 0), 4)
+            far = round(logs.get(f'val_obj_far_{tt}', 0), 4)
+            csi = round(logs.get(f'val_obj_csi_{tt}', 0), 4)
+            print(f"  {int(tt*100)}%:")
+            print(f"  - POD: {pod}")
+            print(f"  - FAR: {far}")
+            print(f"  - CSI: {csi}")
+            
+        # 3. Classification (Is it a TVS?)
+        print(f"\n [TVS / TORNADIC]")
+        for tt in self.thresholds:
+            pod = round(logs.get(f'val_tvs_pod_{tt}', 0), 4)
+            far = round(logs.get(f'val_tvs_far_{tt}', 0), 4)
+            csi = round(logs.get(f'val_tvs_csi_{tt}', 0), 4)
+            print(f"  {int(tt*100)}%:")
+            print(f"  - POD: {pod}")
+            print(f"  - FAR: {far}")
+            print(f"  - CSI: {csi}")
+        print(f"  - Avg Confidence: {logs.get('val_tvs_avg_prob', 0):.4f}") # The 'warm-up' metric
+        
+        # 4. Classification (Severe)
+        print(f"\n [SEVERE / NON-TOR]")
+        for tt in self.thresholds:
+            pod = round(logs.get(f'val_sev_pod_{tt}', 0), 4)
+            far = round(logs.get(f'val_sev_far_{tt}', 0), 4)
+            csi = round(logs.get(f'val_sev_csi_{tt}', 0), 4)
+            print(f"  {int(tt*100)}%:")
+            print(f"  - POD: {pod}")
+            print(f"  - FAR: {far}")
+            print(f"  - CSI: {csi}")
+        print(f"  - Avg Confidence: {logs.get('val_sev_avg_prob', 0):.4f}")
+        
+        print(f"{'='*40}\n")
+#------------------------------------------------------------------------------------------
 def get_callbacks(c):
     csvlogger = CSVLogger(f"{c['outdir']}/log.csv", append=True)
     early_stopping = EarlyStopping(monitor='val_loss', patience=c['es_patience'], min_delta=0.0001)
@@ -32,7 +84,7 @@ def get_callbacks(c):
                                        patience=c['rlr_patience'],
                                        mode='min'
     )
-    callbacks = [early_stopping, mcp_save, reduce_lr_loss, csvlogger]
+    callbacks = [early_stopping, mcp_save, reduce_lr_loss, csvlogger, RadarMonitor(thresholds=c['monitoring_thresholds'])]
 
     return callbacks
 #------------------------------------------------------------------------------------------
@@ -64,7 +116,7 @@ class RadarYOLOLoss(tf.keras.losses.Loss):
 
         ## Classes (Indices 5 and 6) (Softmax across the last axis only)
         true_classes = y_true[..., 5:7]
-        pred_classes = tf.softmax(y_pred[..., 5:7], axis=-1) 
+        pred_classes = tf.nn.softmax(y_pred[..., 5:7], axis=-1) 
 
         ## Masks
         obj_mask = tf.cast(true_obj > 0, tf.float32) # (B, 64, 64)
@@ -230,13 +282,10 @@ yolo_loss = RadarYOLOLoss(grid_size=64,
 )
 
 # Metrics
-tvs_10 = metrics.RadarMetrics(threshold=0.1)
-tvs_30 = metrics.RadarMetrics(threshold=0.3)
-tvs_50 = metrics.RadarMetrics(threshold=0.5)
-tvs_70 = metrics.RadarMetrics(threshold=0.7)
+metrics_list = [metrics.AvgPredictedClassProb()]
+for tt in c['monitoring_thresholds']:
+    metrics_list.append(metrics.ProbMetrics(threshold=tt))
 
-metrics_list = [tvs_10, tvs_30, tvs_50, tvs_70]
-metrics_list.append(tf.keras.metrics.BinaryAccuracy(name="obj_accuracy"))
 
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=c['lr']),
@@ -294,7 +343,7 @@ best_model = np.sort(glob.glob(f"{c['outdir']}/model-*.keras"))[-1]
 shutil.copy(best_model, f"{os.path.dirname(best_model)}/fit_conv_model.keras")
 
 # Print out config options
-ofile = f"{c['outdir']}/model_config.txt'"
+ofile = f"{c['outdir']}/model_config.txt"
 of = open(ofile,'w')
 for key, value in config.items():
     of.write(str(key) + ': ' + str(value) + '\n')
