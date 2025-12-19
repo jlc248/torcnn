@@ -93,58 +93,80 @@ image_shape = (512, 512)
 #datadir1 = '/myrorss2/work/thea.sandmael/radar' # 2019-2024
 #datadir2 = '/myrorss2/data/thea.sandmael/data/radar' # 2011-2018
 
-input_csv = '/raid/jcintineo/torcnn/torp_datasets/2024_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv'
+input_csvs = glob.glob('/raid/jcintineo/torcnn/torp_datasets/201*Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv') + \
+             glob.glob('/raid/jcintineo/torcnn/torp_datasets/202[0-3]*Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv')
+input_csvs = np.sort(input_csvs)
+#'/raid/jcintineo/torcnn/torp_datasets/2024_Storm_Reports_Expanded_tilt0050_radar_r2500_nodup.csv'
 
-outpatt = '/raid/jcintineo/torcnn/detection/truth_files/%Y/%Y%m%d/{radar}_%Y%m%d-%H%M%S.txt'
+outpatt = '/raid/jcintineo/torcnn/detection/truth_files_100km60min/%Y/%Y%m%d/{radar}_%Y%m%d-%H%M%S.txt'
 
 # Read radar xml
 rad_dict = rad_utils.parse_radar_xml('../static/radarinfo.xml')
 
-df = pd.read_csv(input_csv)
 
-# Container to hold labels. We use this to check if a label was alredy written.
-all_rad_dt_dict = {}
+for input_csv in input_csvs:
 
-# For each TORP detect, add location to truth files
-for row in df.itertuples(index=False):
-
-    radar = row.radar
-
-    if row.radar[0] != 'K':
-        continue
-
-    dt = datetime.strptime(row.radarTimestamp,'%Y%m%d-%H%M%S')
-
-    lat = row.latitudeExtractCenter
-    lon = row.longitudeExtractCenter
-
-    if row.tornado > 0 and row.spout == 0: # exclude spouts for now 
-        class_index = 0
-    elif row.tornado == 0: # nontor
-        class_index = 1
-    else:
-        continue
-        
-    label = latlon_to_yolo_label(rad_dict[radar]['lat'],
-                               rad_dict[radar]['lon'],
-                               lat,
-                               lon,
-                               image_shape=image_shape,
-                               class_index=class_index
-    ) 
-
-    write_line = False
-    key = f"{radar}{dt.strftime('%Y%m%d-%H%M%S')}"
-    if key in all_rad_dt_dict:
-        if label not in all_rad_dt_dict[key]:
-            all_rad_dt_dict[key].append(label)
-            write_line = True
-    else:
-        all_rad_dt_dict[key] = [label]
-        write_line = True
+    df = pd.read_csv(input_csv)
     
-    if write_line:
-        outfile = dt.strftime(outpatt.replace('{radar}', radar))
-        os.makedirs(os.path.dirname(outfile), exist_ok=True)
-        with open(outfile, 'a') as f:
-            f.write(label + '\n')
+    # Container to hold labels. We use this to check if a label was alredy written.
+    all_rad_dt_dict = {}
+    
+    # For each TORP detect, add location to truth files
+    for row in df.itertuples(index=False):
+    
+        radar = row.radar
+    
+        if row.radar[0] != 'K':
+            continue
+    
+        # Check if 
+        if row.closestTorPointsInTime != '-99900':
+            parts = row.closestTorPointsInTime.split(';;')
+            for pp in parts:
+                ss, tt = pp.split(':')
+                if float(ss) <= 100 and float(tt) <= 60:
+                    continue
+        if row.closestTorPointsInSpace != '-99900':
+            parts = row.closestTorPointsInSpace.split(';;')
+            for pp in parts:
+                ss, tt = pp.split(':')
+                if float(ss) <= 100 and float(tt) <= 60:
+                    continue
+    
+        print(radar, row.radarTimestamp)
+    
+        dt = datetime.strptime(row.radarTimestamp,'%Y%m%d-%H%M%S')
+    
+        lat = row.latitudeExtractCenter
+        lon = row.longitudeExtractCenter
+    
+        if row.tornado > 0 and row.spout == 0: # exclude spouts for now 
+            class_index = 0
+        elif row.tornado == 0: # nontor
+            class_index = 1
+        else:
+            continue
+            
+        label = latlon_to_yolo_label(rad_dict[radar]['lat'],
+                                   rad_dict[radar]['lon'],
+                                   lat,
+                                   lon,
+                                   image_shape=image_shape,
+                                   class_index=class_index
+        ) 
+    
+        write_line = False
+        key = f"{radar}{dt.strftime('%Y%m%d-%H%M%S')}"
+        if key in all_rad_dt_dict:
+            if label not in all_rad_dt_dict[key]:
+                all_rad_dt_dict[key].append(label)
+                write_line = True
+        else:
+            all_rad_dt_dict[key] = [label]
+            write_line = True
+        
+        if write_line:
+            outfile = dt.strftime(outpatt.replace('{radar}', radar))
+            os.makedirs(os.path.dirname(outfile), exist_ok=True)
+            with open(outfile, 'a') as f:
+                f.write(label + '\n')

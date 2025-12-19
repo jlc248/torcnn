@@ -345,9 +345,9 @@ shutil.copy(best_model, f"{os.path.dirname(best_model)}/fit_conv_model.keras")
 # Print out config options
 ofile = f"{c['outdir']}/model_config.txt"
 of = open(ofile,'w')
-for key, value in config.items():
+for key, value in c.items():
     of.write(str(key) + ': ' + str(value) + '\n')
 of.write(f"Number of training samples: {n_tsamples}\n")
 of.write(f"Number of validation samples: {n_vsamples}\n")
 of.close()
-pickle.dump(config,open(f"{c['outdir']}/model_config.pkl", "wb"))
+pickle.dump(c, open(f"{c['outdir']}/model_config.pkl", "wb"))
