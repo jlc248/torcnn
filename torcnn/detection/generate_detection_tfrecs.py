@@ -152,7 +152,7 @@ def collect_and_write_tfrec(target_file,
    
     if past_dts:
         closest_dt = max(past_dts)
-        if (raddt - closest_dt).seconds > 240:
+        if (raddt - closest_dt).seconds > 360: # 6 min
             logging.error(f"{raddt} is too far from {closest_dt}. {radar_str}")
             return
         else:
@@ -212,7 +212,7 @@ if __name__ == "__main__":
     # Pattern for truth files.
     ## nontor truth files contain 0 points.
     ## tor truth files contain info for 1 or more points
-    target_glob = f'/raid/jcintineo/torcnn/detection/truth_files/2024/20240515/K???_*.txt'
+    target_glob = f'/raid/jcintineo/torcnn/detection/truth_files/2024/2024*/K???_*.txt'
 
     target_files = np.sort(glob.glob(target_glob))
 
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     
     number_of_files = len(target_files)
     
-    max_workers = 20 #min(gfs_columns_extract_workers, os.cpu_count())
+    max_workers = 40 #min(gfs_columns_extract_workers, os.cpu_count())
     
     with tqdm(total=number_of_files) as pbar: # progress bar
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:

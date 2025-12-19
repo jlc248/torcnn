@@ -458,7 +458,7 @@ best_model = np.sort(glob.glob(f"{outdir}/model-*.keras"))[-1]
 shutil.copy(best_model,f"{os.path.dirname(best_model)}/fit_conv_model.keras")
 
 #load the best-val_loss model
-conv_model = load_model(f"{outdir}/fit_conv_model.keras",compile=False) #False b/c no more training
+#conv_model = load_model(f"{outdir}/fit_conv_model.keras",compile=False) #False b/c no more training
 
 
 pickle.dump(history.history,open(os.path.join(outdir,"training_history.pkl"),"wb"),protocol=4)

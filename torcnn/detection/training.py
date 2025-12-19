@@ -1,10 +1,43 @@
 import tensorflow as tf
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, CSVLogger, TensorBoard
 from yolo_model import build_residual_radar_yolo
 import metrics
+import config
+import shutil
+import glob
+import numpy as np
+import sys,os
+import pickle
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' # 0=All, 1=No Info, 2=No Warnings, 3=No Errors
 
+c = config.config()
+
+if os.path.isdir(c['outdir']):
+    print(f"{c['outdir']} already exists. Exiting.")
+    sys.exit()
+else:
+    os.makedirs(c['outdir'], exist_ok=True)
+
+AUTOTUNE=tf.data.AUTOTUNE
+#BUFFER_SIZE = 16 * 1024**2 # 16MB
+#------------------------------------------------------------------------------------------
+def get_callbacks(c):
+    csvlogger = CSVLogger(f"{c['outdir']}/log.csv", append=True)
+    early_stopping = EarlyStopping(monitor='val_loss', patience=c['es_patience'], min_delta=0.0001)
+    mcp_save = ModelCheckpoint(os.path.join(c['outdir'],'model-{epoch:02d}-{val_loss:03f}.keras'), save_best_only=True, monitor='val_loss', mode='min')
+    reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss',
+                                       cooldown=c['rlr_cooldown'],
+                                       verbose=1, # min_delta=0.00001,
+                                       factor=c['rlr_factor'],
+                                       patience=c['rlr_patience'],
+                                       mode='min'
+    )
+    callbacks = [early_stopping, mcp_save, reduce_lr_loss, csvlogger]
+
+    return callbacks
 #------------------------------------------------------------------------------------------
 class RadarYOLOLoss(tf.keras.losses.Loss):
-    def __init__(self, grid_size=64, obj_weight=5.0, noobj_weight=0.5, importance=3.0):
+    def __init__(self, grid_size=64, obj_weight=5.0, noobj_weight=0.5, importance=15.0):
         super().__init__()
         self.grid_size = grid_size
         # We weigh "Object" cells higher because they are rare
@@ -15,184 +48,186 @@ class RadarYOLOLoss(tf.keras.losses.Loss):
 
     def call(self, y_true, y_pred):
         """
-        y_true: (Batch, 64, 64, 6) -> Prepared using build_target_tensor
-        y_pred: (Batch, 64, 64, 6) -> Raw output from model
+        y_true: (Batch, 64, 64, 7) -> Prepared using build_target_tensor
+        y_pred: (Batch, 64, 64, 7) -> Raw output from model
+
+        in y_pred: 7 = objectness, x, y, width, height, tvs_prob, sev_prob
         """
         # Extract components
-        # (Using sigmoid on pred objectness/offsets to keep them 0-1)
+        ## Objectness (Sigmoid)
         true_obj = y_true[..., 0]
         pred_obj = tf.sigmoid(y_pred[..., 0])
         
+        ## Bounding Boxes (Sigmoid)
         true_box = y_true[..., 1:5]
-        pred_box = tf.concat([
-            tf.sigmoid(y_pred[..., 1:3]), # x, y
-            tf.exp(y_pred[..., 3:5])      # w, h
-        ], axis=-1)
+        pred_box = tf.sigmoid(y_pred[..., 1:5]) # x, y, w, h
 
-        # Classes (Indices 5 and 6)
+        ## Classes (Indices 5 and 6) (Softmax across the last axis only)
         true_classes = y_true[..., 5:7]
-        pred_classes = tf.sigmoid(y_pred[..., 5:7]) # Independent probabilities
+        pred_classes = tf.softmax(y_pred[..., 5:7], axis=-1) 
 
-        # Masks
-        obj_mask = tf.expand_dims(tf.cast(true_obj > 0, tf.float32), -1)
+        ## Masks
+        obj_mask = tf.cast(true_obj > 0, tf.float32) # (B, 64, 64)
         noobj_mask = tf.cast(true_obj == 0, tf.float32) 
 
-        # Objectness Loss (Binary Cross Entropy)
-        # We penalize both false positives and false negatives
-        obj_bce = tf.keras.losses.binary_crossentropy(
-            tf.expand_dims(true_obj, -1), tf.expand_dims(pred_obj, -1)
-        )
+        # LOSS CALCS
+
+        ## Objectness Loss (BCE)
+        ## Use simple log loss to avoid Keras wrapper overhead here
+        obj_bce = - (true_obj * tf.math.log(pred_obj + 1e-7) + 
+                     (1 - true_obj) * tf.math.log(1 - pred_obj + 1e-7))
         
-        # Weighted sum
-        total_obj_loss = (self.obj_weight * tf.squeeze(obj_mask) * obj_bce) + \
-                         (self.noobj_weight * noobj_mask * obj_bce)       
+        ### Weighted sum
+        weighted_obj_loss = (self.obj_weight * obj_mask * obj_bce) + \
+                            (self.noobj_weight * noobj_mask * obj_bce)       
  
-        # Localization Loss (MSE) - only where cells exist
-        loc_loss = tf.reduce_sum(obj_mask * tf.square(true_box - pred_box), axis=-1)
+        ## Localization Loss (MSE) - only where cells exist
+        loc_loss = obj_mask * tf.reduce_sum(tf.square(true_box - pred_box), axis=-1)
 
-        # Class Loss with Importance Weighting
-        # We calculate BCE for each class
-        class_bce = tf.keras.losses.binary_crossentropy(true_classes, pred_classes)
+        # Class Loss: Categorical Crossentropy with TVS importance
+        class_ce = -tf.reduce_sum(true_classes * tf.math.log(pred_classes + 1e-7), axis=-1)
 
-        # We want to weight Class 0 (TVS/pre-tor) errors more heavily
-        # Create a weight vector: [importance, 1.0]
-        weights = tf.constant([self.importance, 1.0])
-        weighted_class_bce = class_bce * tf.reduce_sum(true_classes * weights, axis=-1)
+        # Apply the TVS importance weight properly
+        # Create a mask that is 'importance' for TVS and 1.0 for Severe
+        # Weight the TVS samples (Class 0) much more heavily
+        class_weights = (true_classes[..., 0] * self.importance) + (true_classes[..., 1] * 1.0)
+        weighted_class_loss = obj_mask * (class_ce * class_weights)
 
-        # Only apply class loss where an object actually exists
-        total_class_loss = tf.reduce_sum(obj_mask * tf.expand_dims(weighted_class_bce, -1), axis=-1)
+        # Total Loss: Sum everything, then average over the batch
+        total_loss = tf.reduce_sum(weighted_obj_loss + loc_loss + weighted_class_loss)
 
-        # Final Combined Loss
-        return tf.reduce_mean(total_obj_loss + loc_loss + total_class_loss)
+        # Return average per-batch-item
+        batch_size = tf.cast(tf.shape(y_true)[0], tf.float32)
+        return total_loss / batch_size
 
 #------------------------------------------------------------------------------------------
-def process_labels_to_grid(labels, grid_size=64):
+
+def process_labels_to_grid(labels_tensor, grid_size=64):
     """
-    labels: (N, 5) tensor of [class, x, y, w, h]
-    returns: (grid_size, grid_size, 7) tensor
+    Runs on CPU. Standard Python debugging (print, breakpoints) works here.
     """
-    # Create an empty grid
-    grid = tf.zeros((grid_size, grid_size, 7), dtype=tf.float32)
+    # 1. Convert Tensor to NumPy immediately for easy logic
+    labels = labels_tensor.numpy() 
     
-    # If there are no labels (background image), return the empty grid
-    if tf.shape(labels)[0] == 0:
-        return grid
+    # 2. Create the empty grid (64, 64, 7)
+    grid = np.zeros((grid_size, grid_size, 7), dtype=np.float32)
 
-    for i in range(tf.shape(labels)[0]):
-        label = labels[i]
+    # DEBUG TIP: Uncomment the line below to see labels during training
+    # print(f"Processing {len(labels)} objects into grid...")
 
-        # Extract class and normalized coordinates
-        cls_id = tf.cast(label[0], tf.int32)
-        x_norm, y_norm = label[1], label[2]
-        w_norm, h_norm = label[3], label[4]
+    for label in labels:
+        cls_id = int(label[0])
+        x_norm, y_norm, w_norm, h_norm = label[1], label[2], label[3], label[4]
 
-        # Calculate grid cell indices
-        gx = tf.cast(tf.floor(x_norm * grid_size), tf.int32)
-        gy = tf.cast(tf.floor(y_norm * grid_size), tf.int32)
+        # Calculate grid cell indices (0 to 63)
+        gx = int(np.floor(x_norm * grid_size))
+        gy = int(np.floor(y_norm * grid_size))
         
-        # Ensure indices stay within 0-63 bounds
-        gx = tf.clip_by_value(gx, 0, grid_size - 1)
-        gy = tf.clip_by_value(gy, 0, grid_size - 1)
+        # Bounds check
+        gx = np.clip(gx, 0, grid_size - 1)
+        gy = np.clip(gy, 0, grid_size - 1)
 
-        # Calculate relative offsets within the 5km cell
-        x_offset = (x_norm * tf.cast(grid_size, tf.float32)) - tf.cast(gx, tf.float32)
-        y_offset = (y_norm * tf.cast(grid_size, tf.float32)) - tf.cast(gy, tf.float32)
+        # Calculate relative offsets within the 5km cell (0.0 to 1.0)
+        x_offset = (x_norm * grid_size) - gx
+        y_offset = (y_norm * grid_size) - gy
 
-        # Create one-hot encoding for the two classes
-        # If cls_id is 0 -> [1, 0]; if 1 -> [0, 1]
-        one_hot_class = tf.one_hot(cls_id, depth=2)
-
-        # Prepare the 7-item update vector
-        # [Objectness, X, Y, W, H, Prob_Class0, Prob_Class1]
-        update_values = tf.concat([
-            [1.0],                       # Objectness
-            [x_offset, y_offset],        # Box Centroid
-            [w_norm, h_norm],            # Box Size
-            one_hot_class                # Class Probabilities
-        ], axis=0)
-
-        indices = tf.cast([[gy, gx]], tf.int32)
-        updates = tf.expand_dims(update_values, 0)
+        # Fill the 7 channels for this specific grid cell
+        grid[gy, gx, 0] = 1.0                # Objectness
+        grid[gy, gx, 1] = x_offset           # X Offset
+        grid[gy, gx, 2] = y_offset           # Y Offset
+        grid[gy, gx, 3] = w_norm             # Width (normalized)
+        grid[gy, gx, 4] = h_norm             # Height (normalized)
         
-        grid = tf.tensor_scatter_nd_update(grid, indices, updates)
+        # One-hot encoding for 2 classes (Indices 5 and 6)
+        if cls_id == 0:
+            grid[gy, gx, 5] = 1.0 # TVS
+            grid[gy, gx, 6] = 0.0
+        else:
+            grid[gy, gx, 5] = 0.0
+            grid[gy, gx, 6] = 1.0 # Non-Tor
 
     return grid
 
-#------------------------------------------------------------------------------------------
-def preprocess_radar_batch(image, labels):
-    """
-    3-Channel Input: 0:Z (Reflectivity), 1:V (Velocity), 2:Rho (CC)
-    """
-    z = image[..., 0:1] / 70.
-    v = image[..., 1:2] / 100
-    rho = image[..., 2:3]
-
-    # Reflectivity: 0 to 75 dBZ -> [0, 1]
-    z = tf.clip_by_value(z, 0.0, 75.0)
-    z = z / 75.0 
-    
-    # Velocity: -75 to 75 m/s -> [-1, 1]
-    v = tf.clip_by_value(v, -10.0, 100.0)
-    v = v / 100.0
-    
-    # Debris is often < 0.8.
-    # but clipping helps remove noise.
-    rho = tf.clip_by_value(rho, 0.4, 1.0)
-
-    normalized_image = tf.concat([z, v, rho], axis=-1)
-    return normalized_image, labels
 
 #------------------------------------------------------------------------------------------
 def _parse_function(proto):
-    feature_description = {
-        'image': tf.io.FixedLenFeature([], tf.string),
-        'labels': tf.io.VarLenFeature(tf.float32),
-    }
-    parsed = tf.io.parse_single_example(proto, feature_description)
 
-    # Decode image
-    image = tf.io.decode_raw(parsed['image'], tf.float32)
-    image = tf.reshape(image, (512, 512, 4))
+    feature_description = {'labels': tf.io.VarLenFeature(tf.float32)}
 
-    # Decode labels (reshape to N objects, 5 columns)
-    labels = tf.sparse.to_dense(parsed['labels'])
-    labels = tf.reshape(labels, (-1, 5))
+    # Define the n-D predictor features
+    for chan in c['channels']:
+        feature_description[chan] =  tf.io.FixedLenFeature([], tf.string)
 
-    return image, labels
+    # Parse the single example
+    features = tf.io.parse_single_example(proto, feature_description)
+
+    channel_list = []
+    for chan in c['channels']:
+        # Use decode_raw b/c I used .tobytes()
+        raw_data = tf.io.decode_raw(features[chan], out_type=tf.float32)
+        
+        chan_tensor = tf.reshape(raw_data, [c['PS'][0], c['PS'][1], 1])
+
+        # Normalize
+        c_min = c['bsinfo'][chan]['min']
+        c_max = c['bsinfo'][chan]['max']
+        if chan == 'Velocity' or chan == 'Zdr':
+            # Scale Velocity to [-1, 1]
+            # Assumes c_min is -80 and c_max is 80
+            chan_tensor = chan_tensor / c_max
+        else:
+            # Scale Z and RhoHV to [0, 1]
+            chan_tensor = (chan_tensor - c_min) / (c_max - c_min + 1e-7)
+        chan_tensor = chan_tensor / c['bsinfo'][chan]['max']
+
+        channel_list.append(chan_tensor)
+    
+    # Combine all at once along the last axis
+    pred_tensor = tf.concat(channel_list, axis=-1)
+
+
+    # Decode raw labels
+    raw_labels = tf.sparse.to_dense(features['labels'])
+    raw_labels = tf.reshape(raw_labels, (-1, 5))
+
+    # --- The Choice: Pure TF or py_function? ---
+    # Since process_labels_to_grid uses a loop and tensor_scatter_nd_update, 
+    # it is safer and easier to wrap just that part in a py_function.
+    
+    target_grid = tf.py_function(
+        func=process_labels_to_grid,
+        inp=[raw_labels, 64],
+        Tout=tf.float32
+    )
+
+    # Manually set the shapes so the model knows what's coming
+    pred_tensor.set_shape([c['PS'][0], c['PS'][1], len(c['channels'])])
+    target_grid.set_shape([64, 64, 7])
+
+    return pred_tensor, target_grid
 
 #------------------------------------------------------------------------------------------
-def get_dataset(tfrecord_path, batch_size=16, grid_size=64):
-    dataset = tf.data.TFRecordDataset(tfrecord_path)
+def get_dataset(tfrecord_path, batch_size=16, grid_size=64, shuffle=128):
+    dataset = tf.data.TFRecordDataset(tfrecord_path, num_parallel_reads=AUTOTUNE)
     
-    # 1. Parse the TFRecord
-    dataset = dataset.map(_parse_function, num_parallel_calls=tf.data.AUTOTUNE)
-    
-    # 2. Normalize Z, V, and Rho (3 channels)
-    # 3. Transform [N, 5] labels into [64, 64, 7] grid
-    def finalize_data(image, labels):
-        # Apply the 3-channel normalization we wrote earlier
-        norm_image, _ = preprocess_radar_batch(image, labels)
-        
-        # Transform labels to grid
-        # We use py_function if the scatter logic is tricky, 
-        # but here we'll assume the process_labels_to_grid logic above.
-        target_grid = process_labels_to_grid(labels, grid_size=grid_size)
-        
-        return norm_image, target_grid
-
-    dataset = dataset.map(finalize_data, num_parallel_calls=tf.data.AUTOTUNE)
-    
-    dataset = dataset.shuffle(128).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    # Parse the TFRecord and normalize predictor data
+    dataset = dataset.map(_parse_function, num_parallel_calls=AUTOTUNE)
+   
+    dataset = dataset.shuffle(shuffle).batch(batch_size).prefetch(AUTOTUNE)
     return dataset
 
 #------------------------------------------------------------------------------------------
 #------------------------------------------------------------------------------------------
 
 # Initialize your Residual Radar YOLO
-model = build_residual_radar_yolo(input_shape=(512, 512, 3))
+model = build_residual_radar_yolo(input_shape=(c['PS'][0], c['PS'][1], len(c['channels'])))
 
 # Initialize the custom Radar Loss
-yolo_loss = RadarYOLOLoss(grid_size=64, obj_weight=5.0, noobj_weight=0.5)
+yolo_loss = RadarYOLOLoss(grid_size=64,
+                          obj_weight=c['obj_weight'],
+                          noobj_weight=c['noobj_weight'],
+                          importance=c['tvs_importance']
+)
 
 # Metrics
 tvs_10 = metrics.RadarMetrics(threshold=0.1)
@@ -200,18 +235,70 @@ tvs_30 = metrics.RadarMetrics(threshold=0.3)
 tvs_50 = metrics.RadarMetrics(threshold=0.5)
 tvs_70 = metrics.RadarMetrics(threshold=0.7)
 
-metrics = [tvs_10, tvs_30, tvs_50, tvs_70]
-metrics.append(tf.keras.metrics.BinaryAccuracy(name="obj_accuracy"))
+metrics_list = [tvs_10, tvs_30, tvs_50, tvs_70]
+metrics_list.append(tf.keras.metrics.BinaryAccuracy(name="obj_accuracy"))
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-    # Your custom YOLO loss function
+    optimizer=tf.keras.optimizers.Adam(learning_rate=c['lr']),
+    # custom YOLO loss function
     loss=yolo_loss, 
-    metrics=metrics,
+    metrics=metrics_list,
+)
+print(model.summary())
+
+
+# Make training and validation datasets
+
+train_filenames = []
+for pattern in c['train_list']:
+    train_filenames.extend(glob.glob(pattern))
+
+# Uncomment to find corrupted tfrecords
+#find_corrupted_tfrecords(train_filenames)
+#sys.exit()
+
+n_tsamples = len(train_filenames)
+print('n_tsamples',n_tsamples)
+steps_per_epoch = n_tsamples // c['batchsize']
+print('steps_per_epoch:', steps_per_epoch)
+
+train_ds = get_dataset(train_filenames, batch_size=c['batchsize'])
+
+val_filenames = []
+for pattern in c['val_list']:
+    val_filenames.extend(glob.glob(pattern))
+n_vsamples = len(val_filenames)
+print('n_vsamples',n_vsamples)
+
+val_ds = get_dataset(val_filenames, batch_size=c['batchsize'])
+
+
+# Callbacks
+callbacks = get_callbacks(c)
+
+
+# Fit
+model.fit(train_ds,
+          validation_data=val_ds,
+          epochs=100,
+          verbose=1,
+          steps_per_epoch=steps_per_epoch,
+          callbacks=callbacks
 )
 
-# Train
-train_ds = get_dataset("radar_train.tfrecord", batch_size=16)
-val_ds = get_dataset("radar_val.tfrecord", batch_size=16)
 
-model.fit(train_ds, validation_data=val_ds, epochs=50)
+# Saving data
+print('Saving model and training history...')
+#copy the model with the best val_loss
+best_model = np.sort(glob.glob(f"{c['outdir']}/model-*.keras"))[-1]
+shutil.copy(best_model, f"{os.path.dirname(best_model)}/fit_conv_model.keras")
+
+# Print out config options
+ofile = f"{c['outdir']}/model_config.txt'"
+of = open(ofile,'w')
+for key, value in config.items():
+    of.write(str(key) + ': ' + str(value) + '\n')
+of.write(f"Number of training samples: {n_tsamples}\n")
+of.write(f"Number of validation samples: {n_vsamples}\n")
+of.close()
+pickle.dump(config,open(f"{c['outdir']}/model_config.pkl", "wb"))

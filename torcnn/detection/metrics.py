@@ -8,49 +8,87 @@ class RadarMetrics(tf.keras.metrics.Metric):
         self.tvs_tp = self.add_weight(name='tvs_tp', initializer='zeros')
         self.tvs_fn = self.add_weight(name='tvs_fn', initializer='zeros')
         self.tvs_fp = self.add_weight(name='tvs_fp', initializer='zeros')
+        self.tvs_avg_prob = self.add_weight(name='tvs_avg_prob', initializer='zeros')
+        self.tvs_count = self.add_weight(name='tvs_count', initializer='zeros')
         # Trackers for non-tor circulation class
-        #self.circ_tp = self.add_weight(name='circ_tp', initializer='zeros')
-        #self.circ_fn = self.add_weight(name='circ_fn', initializer='zeros')
-        #self.circ_fp = self.add_weight(name='circ_fp', initializer='zeros')
-
+        self.sev_tp = self.add_weight(name='sev_tp', initializer='zeros')
+        self.sev_fn = self.add_weight(name='sev_fn', initializer='zeros')
+        self.sev_fp = self.add_weight(name='sev_fp', initializer='zeros')
+        self.sev_avg_prob = self.add_weight(name='sev_avg_prob', initializer='zeros')
+        self.sev_count = self.add_weight(name='sev_count', initializer='zeros')
     def update_state(self, y_true, y_pred, sample_weight=None):
-        # Predictions
-        pred_obj = tf.sigmoid(y_pred[..., 0])
-        pred_classes = tf.sigmoid(y_pred[..., 5:7]) # [TVS, Non-Tor]
-        
         # Truth
+        ## Object
         true_obj = y_true[..., 0]
-        true_class_idx = tf.argmax(y_true[..., 5:7], axis=-1) # 0 for TVS, 1 for Non-Tor. These dims are one-hot encoded.
-        
-        # If object and 
-        is_actual_tvs = tf.cast(true_obj >= 0.5, tf.float32) * \
-                        tf.cast(true_class_idx == 0, tf.float32) # 0 is TVS, 1 is Non-Tor
-        
-        # Use the threshold consistently
-        is_detection = tf.cast(pred_obj >= self.threshold, tf.float32)
-        predicted_class_idx = tf.argmax(pred_classes, axis=-1) # get index of class with higher prob
-        
-        # Predicted TVS = Object detected AND Winner is index 0 AND Winner > threshold
-        is_pred_tvs = is_detection * \
-                      tf.cast(predicted_class_idx == 0, tf.float32) * \
-                      tf.cast(pred_classes[..., 0] >= self.threshold, tf.float32)
 
-        # Metrics
-        tp = tf.reduce_sum(is_pred_tvs * is_actual_tvs)
-        fp = tf.reduce_sum(is_pred_tvs * (1.0 - is_actual_tvs))
-        fn = tf.reduce_sum(is_actual_tvs * (1.0 - is_pred_tvs))
+        # Predictions
+        ## Object
+        pred_obj = tf.sigmoid(y_pred[..., 0])
+        ## Classes
+        pred_probs = tf.nn.softmax(y_pred[..., 5:7], axis=-1) # [TVS, Non-Tor]
         
-        self.tvs_tp.assign_add(tp)
-        self.tvs_fp.assign_add(fp)
-        self.tvs_fn.assign_add(fn)
+        # Threshold Masks
+        is_actual = tf.cast(true_obj > 0.5, tf.float32)
+        is_detected = tf.cast(pred_obj >= self.threshold, tf.float32)
+
+        # Class-Specific Logical Masks (Truth)
+        # y_true is one-hot encoded: [1, 0] is TVS, [0, 1] is Severe
+        actual_is_tvs = is_actual * y_true[..., 5]
+        actual_is_sev = is_actual * y_true[..., 6]
+
+        # Class-Specific Logical Masks (Predictions)
+        # A TVS is "predicted" if objectness is high AND TVS probability is >= threshold
+        pred_is_tvs = is_detected * tf.cast(pred_probs[..., 0] >= self.threshold, tf.float32)
+        pred_is_sev = is_detected * tf.cast(pred_probs[..., 1] >= self.threshold, tf.float32)
+
+        
+        # Metrics
+        # TVS (Class 0)
+        t_tp = tf.reduce_sum(pred_is_tvs * actual_is_tvs)
+        t_fp = tf.reduce_sum(pred_is_tvs * (1.0 - actual_is_tvs))
+        t_fn = tf.reduce_sum(actual_is_tvs * (1.0 - pred_is_tvs))
+        
+        # Severe (Class 1)
+        s_tp = tf.reduce_sum(pred_is_sev * actual_is_sev)
+        s_fp = tf.reduce_sum(pred_is_sev * (1.0 - actual_is_sev))
+        s_fn = tf.reduce_sum(actual_is_sev * (1.0 - pred_is_sev))
+        
+        self.tvs_tp.assign_add(t_tp)
+        self.tvs_fp.assign_add(t_fp)
+        self.tvs_fn.assign_add(t_fn)
+        
+        self.sev_tp.assign_add(s_tp)
+        self.sev_fp.assign_add(s_fp)
+        self.sev_fn.assign_add(s_fn)
+
+        # Calculate average probability for cells that ARE actually TVS
+        tvs_probs_at_truth = pred_probs[..., 0] * actual_is_tvs
+        self.tvs_avg_prob.assign_add(tf.reduce_sum(tvs_probs_at_truth))
+        self.tvs_count.assign_add(tf.reduce_sum(actual_is_tvs))
+        
+        # Calculate average probability for cells that ARE actually SEV
+        sev_probs_at_truth = pred_probs[..., 0] * actual_is_sev
+        self.sev_avg_prob.assign_add(tf.reduce_sum(sev_probs_at_truth))
+        self.sev_count.assign_add(tf.reduce_sum(actual_is_sev))
 
     def result(self):
         #recall = self.tvs_tp / (self.tvs_tp + self.tvs_fn + 1e-7)
         #precision = self.tvs_tp / (self.tvs_tp + self.tvs_fp + 1e-7)
-        pod = self.tvs_tp / (self.tvs_tp + self.tvs_fn + 1e-7)
-        far = self.tvs_fp / (self.tvs_fp + self.tvs_tp + 1e-7)
-        csi = self.tvs_fp / (self.tvs_tp + self.tvs_fp + self.tvs_fn + 1e-7)
-        return {f"tvs_pod_{self.threshold}": pod, f"tvs_far_{self.threshold}": far, f"tvs_csi_{self.threshold}": csi}
+        pod_t = self.tvs_tp / (self.tvs_tp + self.tvs_fn + 1e-7)
+        far_t = self.tvs_fp / (self.tvs_fp + self.tvs_tp + 1e-7)
+        csi_t = self.tvs_tp / (self.tvs_tp + self.tvs_fp + self.tvs_fn + 1e-7)
+        pod_s = self.sev_tp / (self.sev_tp + self.sev_fn + 1e-7)
+        far_s = self.sev_fp / (self.sev_fp + self.sev_tp + 1e-7)
+        csi_s = self.sev_tp / (self.sev_tp + self.sev_fp + self.sev_fn + 1e-7)
+        return {f"tvs_pod_{self.threshold}": pod_t, 
+                f"tvs_far_{self.threshold}": far_t,
+                f"tvs_csi_{self.threshold}": csi_t,
+                "tvs_avg_conf": self.tvs_avg_prob / (self.tvs_count + 1e-7),
+                f"sev_pod_{self.threshold}": pod_s,
+                f"sev_far_{self.threshold}": far_s,
+                f"sev_csi_{self.threshold}": csi_s,
+                "tvs_avg_conf": self.sev_avg_prob / (self.sev_count + 1e-7)
+        }
 
 
 
