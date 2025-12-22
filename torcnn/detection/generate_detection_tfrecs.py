@@ -89,7 +89,7 @@ def create_example(radar_data, labels):
     # Convert radar image to raw bytes
     for key,item in radar_data.items():
         # Ensure it is float32 for consistency
-        radar_bytes = item.astype(np.float32).tobytes()
+        radar_bytes = item.tobytes()
         features[key] = tf.train.Feature(bytes_list=tf.train.BytesList(value=[radar_bytes]))
 
     # Flatten labels into a 1D list [cls1, x1, y1, w1, h1, cls2, x2, ...]
@@ -103,6 +103,7 @@ def create_example(radar_data, labels):
 #--------------------------------------------------------------------------------------------------
 def collect_and_write_tfrec(target_file,
                             varnames,
+                            bsinfo,
                             datapatt1,
                             outpatt,
                             datapatt2=None,
@@ -114,9 +115,10 @@ def collect_and_write_tfrec(target_file,
     Args:
         target_file (str): txt file where each row is info about a circulation object.
         varnames (dict): List of pairs of our outnames and pyart variable names.
-        datapatt1 (str): Full path data pattern. E.g., '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/raw/{radar}*_V06'
+        bsinfo (dict): Byte-scaling information
+        datapatt1 (str): Full path data pattern. E.g., '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/raw/{radar}*_V0*'
         outpatt (str): Pattern for root outdir. E.g., '/raid/jcintineo/torcnn/detection/tfrecs/%Y/%Y%m%d/{radar}_%Y%m%d-%H%M%S.tfrec'
-        datapatt2 (str): Secondary data pattern. E.g., '/work/thea.sandmael/radar/%Y%m%d/{radar}/raw/{radar}*_V06'
+        datapatt2 (str): Secondary data pattern. E.g., '/work/thea.sandmael/radar/%Y%m%d/{radar}/raw/{radar}*_V0*'
         year_thresh (int): The threshold such that >= year_thresh will use datapatt2. Default is 2019.
     """
 
@@ -145,8 +147,8 @@ def collect_and_write_tfrec(target_file,
     if raddt.hour == 0: # check previous day if we're near 00Z
         all_files += glob.glob((raddt - timedelta(days=1)).strftime(dpat))
     all_files = np.sort(all_files)
-                             #KVNX20240515_233356_V06
-    dts = [datetime.strptime(os.path.basename(ff)[4:], '%Y%m%d_%H%M%S_V06') for ff in all_files]
+                             #KVNX20240515_233356_V06 or KVNX20240515_233356_V06.gz or V07
+    dts = [datetime.strptime(os.path.basename(ff).split('_V0')[0][4:], '%Y%m%d_%H%M%S') for ff in all_files]
    
     past_dts = [dt for dt in dts if dt <= raddt]
    
@@ -168,20 +170,31 @@ def collect_and_write_tfrec(target_file,
         detects = [[float(x) for x in line.strip().split()] for line in f] 
 
     # Remap NEXRAD data and dealias velocity using pyart
-    raddict = rad_utils.get_remapped_radar_data(file_path,
-                                                raddt,
-                                                target_tilt=0.5,
-                                                fields=list(varnames.values()),
-                                                x_limits=(-160000.0, 160000.0), # in m
-                                                y_limits=(-160000.0, 160000.0), # in m
-                                                grid_shape=(512, 512)
-    )
+    try:
+        raddict = rad_utils.get_remapped_radar_data(file_path,
+                                                    raddt,
+                                                    target_tilt=0.5,
+                                                    fields=list(varnames.values()),
+                                                    x_limits=(-160000.0, 160000.0), # in m
+                                                    y_limits=(-160000.0, 160000.0), # in m
+                                                    grid_shape=(512, 512)
+        )
+    except Exception as e:
+        # Raise a new error that includes the filename so you can find the culprit
+        raise RuntimeError(f"Failed to process {file_path}") from e
 
     info = {}
     # Expand dims and remove nans
     for key,val in varnames.items():
 
-        info[key] = np.expand_dims(np.nan_to_num(raddict[val], nan=-999) , axis=-1)
+        info[key] = np.expand_dims(
+                        utils.bytescale(
+                            np.nan_to_num(raddict[val], nan=-999),
+                            bsinfo[key]['vmin'],
+                            bsinfo[key]['vmax'] 
+                        )
+                        , axis=-1
+        )
 
 
     outfile = raddt.strftime(opat)
@@ -202,17 +215,17 @@ if __name__ == "__main__":
 
     # Patterns where the raw NEXRAD data live    
     ## 2011-2018
-    datapatt1 = '/myrorss2/data/thea.sandmael/data/radar/%Y%m%d/{radar}/raw/{radar}*_V06'
+    datapatt1 = '/myrorss2/data/thea.sandmael/data/radar/%Y%m%d/{radar}/raw/{radar}*_V0*'
     ## 2019-2024
-    datapatt2 = '/myrorss2/work/thea.sandmael/radar/%Y%m%d/{radar}/raw/{radar}*_V06'
+    datapatt2 = '/myrorss2/work/thea.sandmael/radar/%Y%m%d/{radar}/raw/{radar}*_V0*'
      
     # Output pattern for tfrecs
-    outpatt = '/raid/jcintineo/torcnn/detection/tfrecs/%Y/%Y%m%d/{radar}_%Y%m%d-%H%M%S.tfrec'
+    outpatt = '/raid/jcintineo/torcnn/detection/tfrecs_100km60min/%Y/%Y%m%d/{radar}_%Y%m%d-%H%M%S.tfrec'
     
     # Pattern for truth files.
     ## nontor truth files contain 0 points.
     ## tor truth files contain info for 1 or more points
-    target_glob = f'/raid/jcintineo/torcnn/detection/truth_files/2024/2024*/K???_*.txt'
+    target_glob = f'/raid/jcintineo/torcnn/detection/truth_files_100km60min/20*/20*/K???_*.txt'
 
     target_files = np.sort(glob.glob(target_glob))
 
@@ -226,12 +239,16 @@ if __name__ == "__main__":
     
     logger = logging.getLogger(__name__)
     logger.info(f"begin extract data and write TFRecords")
-    
+   
+    # Get byte-scaling info
+    bsinfo = utils.get_bsinfo()
+ 
     # Common arguments to pass in
     # Do these varnames need to match those in the function?
     # I assume so. 
     collect_and_write_tfrec_args = dict(
         varnames=varnames,
+        bsinfo=bsinfo,
         datapatt1=datapatt1,
         outpatt=outpatt,
         datapatt2=datapatt2,
@@ -255,7 +272,7 @@ if __name__ == "__main__":
                 try:
                     future.result()
                 except Exception as e:
-                    logger.error(f"Error processing a row: {e}")
+                    logger.error(f"Error processing a file")
                     logger.error(traceback.format_exc())
                 finally: 
                     pbar.update(1)

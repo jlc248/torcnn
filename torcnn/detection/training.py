@@ -230,7 +230,6 @@ def _parse_function(proto):
         else:
             # Scale Z and RhoHV to [0, 1]
             chan_tensor = (chan_tensor - c_min) / (c_max - c_min + 1e-7)
-        chan_tensor = chan_tensor / c['bsinfo'][chan]['max']
 
         channel_list.append(chan_tensor)
     
