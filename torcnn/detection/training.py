@@ -158,10 +158,10 @@ def process_labels_to_grid(labels_tensor, grid_size=64):
     """
     Runs on CPU. Standard Python debugging (print, breakpoints) works here.
     """
-    # 1. Convert Tensor to NumPy immediately for easy logic
+    # Convert Tensor to NumPy immediately for easy logic
     labels = labels_tensor.numpy() 
     
-    # 2. Create the empty grid (64, 64, 7)
+    # Create the empty grid (64, 64, 7)
     grid = np.zeros((grid_size, grid_size, 7), dtype=np.float32)
 
     # DEBUG TIP: Uncomment the line below to see labels during training
@@ -216,20 +216,9 @@ def _parse_function(proto):
     channel_list = []
     for chan in c['channels']:
         # Use decode_raw b/c I used .tobytes()
-        raw_data = tf.io.decode_raw(features[chan], out_type=tf.float32)
+        raw_data = tf.io.decode_raw(features[chan], out_type=tf.uint8)
         
         chan_tensor = tf.reshape(raw_data, [c['PS'][0], c['PS'][1], 1])
-
-        # Normalize
-        c_min = c['bsinfo'][chan]['min']
-        c_max = c['bsinfo'][chan]['max']
-        if chan == 'Velocity' or chan == 'Zdr':
-            # Scale Velocity to [-1, 1]
-            # Assumes c_min is -80 and c_max is 80
-            chan_tensor = chan_tensor / c_max
-        else:
-            # Scale Z and RhoHV to [0, 1]
-            chan_tensor = (chan_tensor - c_min) / (c_max - c_min + 1e-7)
 
         channel_list.append(chan_tensor)
     
