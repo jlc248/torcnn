@@ -151,18 +151,29 @@ class AvgPredictedClassProb(tf.keras.metrics.Metric):
         self.sev_avg_prob.assign(0.0)
         self.sev_count.assign(0.0)
 
-
 def average_distance_error_km(y_true, y_pred):
     # Mask to only where an actual object exists
     obj_mask = tf.cast(y_true[..., 0] >= 0.5, tf.float32)
+
+    # 1. Create a coordinate grid for the cells
+    # grid_indices will have shape (64, 64)
+    grid_x, grid_y = tf.meshgrid(tf.range(64, dtype=tf.float32), tf.range(64, dtype=tf.float32))
+
+    # 2. Calculate global pixel coordinates (grid_index + offset)
+    # y_true[..., 1] is x_offset, y_true[..., 2] is y_offset
+    true_x_global = (grid_x + y_true[..., 1]) 
+    true_y_global = (grid_y + y_true[..., 2])
     
-    # Calculate global pixel coordinates
-    # (Simplified: grid_index + offset) * pixels_per_cell * km_per_pixel
-    true_x = (tf.range(64, dtype=tf.float32) + y_true[..., 1]) * 5.0
-    pred_x = (tf.range(64, dtype=tf.float32) + tf.sigmoid(y_pred[..., 1])) * 5.0
+    # We must use sigmoid on y_pred because it is linear
+    pred_x_global = (grid_x + tf.sigmoid(y_pred[..., 1]))
+    pred_y_global = (grid_y + tf.sigmoid(y_pred[..., 2]))
+
+    # 3. Calculate Euclidean distance in "grid units"
+    dist_grid = tf.sqrt(tf.square(true_x_global - pred_x_global) + 
+                        tf.square(true_y_global - pred_y_global))
     
-    # Euclidean distance
-    dist = tf.sqrt(tf.square(true_x - pred_x)) # Add Y logic similarly
-    
+    # 4. Convert to KM (assuming each grid cell is 5km)
+    dist_km = dist_grid * 5.0
+
     # Return mean distance only for cells with objects
-    return tf.reduce_sum(dist * obj_mask) / (tf.reduce_sum(obj_mask) + 1e-7)
+    return tf.reduce_sum(dist_km * obj_mask) / (tf.reduce_sum(obj_mask) + 1e-7) 

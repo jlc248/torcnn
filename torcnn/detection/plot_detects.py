@@ -1,6 +1,7 @@
 import sys,os
 sys.path.insert(0, '../')
 sys.path.append('../vda')
+import utils
 import rad_utils
 import pyart
 import numpy as np
@@ -58,6 +59,9 @@ def find_nexrad_binary(raddt, dpat):
 #------------------------------------------------------------------------------------------------------------
 #------------------------------------------------------------------------------------------------------------
 
+# Get byte-scaling info
+bsinfo = utils.get_bsinfo()
+
 # Patterns where the raw NEXRAD data live
 ## 2011-2018
 datapatt1 = '/myrorss2/data/thea.sandmael/data/radar/%Y%m%d/{radar}/raw/{radar}*_V0*'
@@ -74,8 +78,8 @@ varnames = {'Velocity':'dealiased_velocity',
 }
 
 # Open model
-model_dir = '/raid/jcintineo/torcnn/detection/tests/test05'
-model_file = f"{model_dir}/fit_conv_model.keras"
+model_dir = '/raid/jcintineo/torcnn/detection/tests/test01'
+model_file = f"{model_dir}/model-01-1.605266.keras" #fit_conv_model.keras"
 c = load_config_to_dict(f"{model_dir}/model_config.txt")
 conv_model = load_model(model_file, compile=False)
 
@@ -114,12 +118,12 @@ channel_list = []
 for chan in c['channels']:
     data = np.expand_dims(
                utils.bytescale(
-                   np.nan_to_num(raddict[varnames[chan]], nan=-999.)
+                   np.nan_to_num(raddict[varnames[chan]], nan=-999.),
                    bsinfo[chan]['vmin'],
                    bsinfo[chan]['vmax'],
                    min_byte_val=0,
                    max_byte_val=255
-               ),
+               ).astype(float)/255,
                axis=(0, -1)
            )
 
@@ -151,12 +155,18 @@ class_logits = preds[..., 5:7]
 # Apply the activations manually
 # This mirrors exactly what happens inside your loss function
 objectness = tf.sigmoid(obj_logits).numpy()
+plt.imshow(np.squeeze(objectness))
+x = [d[1]*64 for d in detects]
+y = [d[2]*64 for d in detects]
+plt.scatter(x,y,color='red', marker='x', label='Ground Truth')
+plt.show()
+sys.exit()
 probabilities = tf.nn.softmax(class_logits, axis=-1).numpy()
 
 # Now 'objectness' is [0, 1] and 'probabilities' sum to 1.0
 tvs_conf = probabilities[..., 0]
 sev_conf = probabilities[..., 1]
 
-print(np.min(objectness), np.max(objectness), len(np.where(objectness[0] >= 0.07)[0]))
+print(np.min(objectness), np.max(objectness), len(np.where(objectness[0] >= 0.1)[0]))
 print(np.min(tvs_conf), np.max(tvs_conf))
 print(np.min(sev_conf), np.max(sev_conf))

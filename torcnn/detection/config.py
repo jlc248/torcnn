@@ -1,7 +1,7 @@
 def config():
 
     c = {}
-    c['outdir'] = '/raid/jcintineo/torcnn/detection/tests/test06'
+    c['outdir'] = '/raid/jcintineo/torcnn/detection/tests/test02'
     c['channels'] = ['Reflectivity', 'Velocity', 'RhoHV']
     c['PS'] = (512, 512)
     c['batchsize'] = 64
@@ -12,10 +12,10 @@ def config():
         'RhoHV':{'min':0.4, 'max':1.0},
         'Zdr': {'min':-4., 'max':6.},
     }
-    c['obj_weight'] = 15.0
-    c['noobj_weight'] = 0.5
+    c['obj_weight'] = 1.0  #50.0
+    c['noobj_weight'] = 1.0 #0.1
     c['tvs_importance'] = 5.0
-    c['lr'] = 1e-4
+    c['lr'] = 5e-5
     c['rlr_cooldown'] = 2
     c['rlr_patience'] = 1
     c['rlr_factor'] = 0.1

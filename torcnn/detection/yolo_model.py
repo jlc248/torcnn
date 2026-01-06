@@ -1,5 +1,6 @@
 import tensorflow as tf
 from tensorflow.keras import layers, Model
+import numpy as np
 
 def residual_block(x, filters):
     """
@@ -62,9 +63,17 @@ def build_residual_radar_yolo(input_shape=(512, 512, 3)):
 
     # --- YOLO Head ---
     # Final 1x1 conv to get the 7-channel prediction vector
-    # x, y, w, h, obj, class1, class2
+    # obj, x, y, w, h, class1, class2
+
+    # Calculate a bias value that results in ~0.01 probability after sigmoid
+    # log(p / (1-p)) -> log(0.01 / 0.99)
+    prior_prob = 0.01
+    bias_init = np.log(prior_prob / (1 - prior_prob)) # Approx -4.59
+
     prediction_head = layers.Conv2D(7, (1, 1), activation='linear', 
                                     kernel_initializer='he_normal', 
+                                    # Set the bias initializer to a constant negative value for the objectness channel
+                                    bias_initializer=tf.keras.initializers.Constant(value=[bias_init, 0, 0, 0, 0, 0, 0]),
                                     name='yolo_output')(x)
 
     return Model(inputs, prediction_head)
