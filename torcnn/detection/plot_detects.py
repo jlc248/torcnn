@@ -68,7 +68,7 @@ datapatt1 = '/myrorss2/data/thea.sandmael/data/radar/%Y%m%d/{radar}/raw/{radar}*
 ## 2019-2024
 datapatt2 = '/myrorss2/work/thea.sandmael/radar/%Y%m%d/{radar}/raw/{radar}*_V0*'
 
-dpat = datapatt2
+dpat = datapatt1
 
 varnames = {'Velocity':'dealiased_velocity',
             #'SpectrumWidth':'spectrum_width',
@@ -79,13 +79,14 @@ varnames = {'Velocity':'dealiased_velocity',
 
 # Open model
 model_dir = '/raid/jcintineo/torcnn/detection/tests/test01'
-model_file = f"{model_dir}/model-01-1.605266.keras" #fit_conv_model.keras"
+model_file = f"{model_dir}/fit_conv_model.keras"
 c = load_config_to_dict(f"{model_dir}/model_config.txt")
 conv_model = load_model(model_file, compile=False)
 
 #'reflectivity', 'cross_correlation_ratio', 'dealiased_velocity'])
 
 truth_file = '/raid/jcintineo/torcnn/detection/truth_files_100km60min/2021/20210328/KDIX_20210328-230847.txt'
+truth_file = '/raid/jcintineo/torcnn/detection/truth_files_100km60min/2013/20130520/KTLX_20130520-195544.txt'
 with open(truth_file, 'r') as f:
     # list of lists of floats, or an empty list
     detects = [[float(x) for x in line.strip().split()] for line in f]
@@ -95,7 +96,6 @@ raddt = datetime.strptime(os.path.basename(truth_file).split('_')[1], '%Y%m%d-%H
 rad_name = os.path.basename(truth_file)[0:4]
 dpat = dpat.replace('{radar}', rad_name)
 file_path = find_nexrad_binary(raddt, dpat)
-
 
 raddict = rad_utils.get_remapped_radar_data(file_path,
                                             raddt,
@@ -152,13 +152,22 @@ obj_logits = preds[..., 0:1]
 box_params = preds[..., 1:5]
 class_logits = preds[..., 5:7]
 
+
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(18,6))
+
 # Apply the activations manually
-# This mirrors exactly what happens inside your loss function
 objectness = tf.sigmoid(obj_logits).numpy()
-plt.imshow(np.squeeze(objectness))
+ax[0].imshow(np.squeeze(objectness))
+ax[1].imshow(raddict[varnames['Velocity']], vmin=-30, vmax=30, cmap='RdBu')
+ax[2].imshow(raddict[varnames['Reflectivity']], vmin=0, vmax=60, cmap='plasma')
 x = [d[1]*64 for d in detects]
 y = [d[2]*64 for d in detects]
-plt.scatter(x,y,color='red', marker='x', label='Ground Truth')
+
+x8 = [_*8 for _ in x]
+y8 = [_*8 for _ in y]
+ax[0].scatter(x,y,color='red', marker='x', label='Ground Truth')
+ax[1].scatter(x8,y8,color='red', marker='x', label='Ground Truth')
+ax[2].scatter(x8,y8,color='red', marker='x', label='Ground Truth')
 plt.show()
 sys.exit()
 probabilities = tf.nn.softmax(class_logits, axis=-1).numpy()
