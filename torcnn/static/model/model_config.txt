@@ -1,0 +1,42 @@
+coord_conv: False
+ps: (128, 256)
+img_aug: {}
+sample_weights: {}
+class_weights: False
+batch_norm: True
+bias_init: None
+scalar_vars: []
+channels: ['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask', 'range']
+l2_reg: 0.0
+dropout_rate: 0.2
+batchsize: 256
+num_encoding_blocks: 5
+num_decoding_blocks: 0
+num_conv_per_block: 2
+nfmaps_by_block: [128, 128, 128, 128, 128]
+dense_layers: [256, 16]
+filter_width: 3
+conv_activation: leaky_relu
+padding: same
+learning_rate: 0.01
+nepoch: 100
+es_patience: 3
+rlr_factor: 0.1
+rlr_patience: 1
+rlr_cooldown: 2
+cnn: cnn
+input_tuples: [(128, 256, 5)]
+inputs: [['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask', 'range']]
+train_list: ['/raid/jcintineo/torcnn/tfrecs_100km1hr/201[1-9]/2*/[n,t]*/*tfrec', '/raid/jcintineo/torcnn/tfrecs_100km1hr/202[0-2]/2*/[n,t]*/*tfrec']
+val_list: ['/raid/jcintineo/torcnn/tfrecs_100km1hr/2023/2*/[n,t]*/*.tfrec']
+targets: ['tornado']
+byte_scaling_vals: {'Reflectivity': {'vmin': 5, 'vmax': 70}, 'Velocity': {'vmin': -100, 'vmax': 100}, 'AliasedVelocity': {'vmin': -100, 'vmax': 100}, 'AzShear': {'vmin': -0.01, 'vmax': 0.04}, 'DivShear': {'vmin': -0.01, 'vmax': 0.04}, 'PhiDP': {'vmin': 0, 'vmax': 360}, 'RhoHV': {'vmin': 0, 'vmax': 1}, 'SpectrumWidth': {'vmin': 0, 'vmax': 70}, 'Zdr': {'vmin': -4, 'vmax': 6}, 'azimuth': {'vmin': 0, 'vmax': 360}, 'range': {'vmin': 0, 'vmax': 460}}
+binarize: -1
+ngpu: 1
+loss_fcn: binary_crossentropy
+optimizer: AdamW
+outdir: /raid/jcintineo/torcnn/tests/2011-23//test23
+pool: max
+label_smoothing: 0.1
+Number of training samples: 362364
+Number of validation samples: 46112
