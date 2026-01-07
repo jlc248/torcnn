@@ -1,74 +1,86 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
-#include <sys/types.h>
 #include <sys/inotify.h>
 #include <unistd.h>
 #include <glob.h>
+#include <string.h>
 
 #define EVENT_SIZE  (sizeof(struct inotify_event))
 #define BUF_LEN     (1024 * (EVENT_SIZE + 16))
+#define MAX_WATCHES 1024
+
+// Structure to map watch descriptors to path names
+typedef struct {
+    int wd;
+    char path[1024];
+} Watch;
 
 int main(int argc, char **argv) {
+    // 1. Force line buffering for script compatibility
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <path_pattern>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    int length, i = 0;
-    int fd;
-    char buffer[BUF_LEN];
-    glob_t glob_result;
+    int fd = inotify_init();
+    if (fd < 0) { perror("inotify_init"); return 1; }
 
-    // 1. Expand the path pattern (e.g., /path/to/K???)
-    int return_value = glob(argv[1], GLOB_TILDE, NULL, &glob_result);
-    if (return_value != 0) {
-        fprintf(stderr, "Error: Could not resolve path pattern or no directories found.\n");
+    glob_t glob_result;
+    if (glob(argv[1], GLOB_TILDE, NULL, &glob_result) != 0) {
+        fprintf(stderr, "Error resolving path pattern.\n");
         return 1;
     }
 
-    // 2. Initialize inotify
-    fd = inotify_init();
-    if (fd < 0) {
-        perror("inotify_init");
-    }
+    Watch watches[MAX_WATCHES];
+    size_t watch_count = 0;
 
-    // 3. Add watches for every matched directory
-    printf("Watching %zu directories...\n", glob_result.gl_pathc);
-    for (size_t i = 0; i < glob_result.gl_pathc; i++) {
-        // IN_CLOSE_WRITE triggers when a file opened for writing is closed.
-        // This ensures the file is finished being modified/created before printing.
-        int watch = inotify_add_watch(fd, glob_result.gl_pathv[i], IN_CLOSE_WRITE);
-        if (watch == -1) {
-            printf("Could not watch: %s\n", glob_result.gl_pathv[i]);
-        } else {
-            printf("Watching: %s\n", glob_result.gl_pathv[i]);
+    // 2. Add watches and store the paths
+    for (size_t i = 0; i < glob_result.gl_pathc && i < MAX_WATCHES; i++) {
+        int wd = inotify_add_watch(fd, glob_result.gl_pathv[i], IN_CLOSE_WRITE);
+        if (wd != -1) {
+            watches[watch_count].wd = wd;
+            strncpy(watches[watch_count].path, glob_result.gl_pathv[i], 1023);
+            watch_count++;
         }
     }
 
-    // 4. Read events loop
+    printf("Listening for files in %zu directories...\n", watch_count);
+
+    char buffer[BUF_LEN];
     while (1) {
-        i = 0;
-        length = read(fd, buffer, BUF_LEN);
+        int length = read(fd, buffer, BUF_LEN);
+        if (length < 0) { perror("read"); break; }
 
-        if (length < 0) {
-            perror("read");
-        }
-
+        int i = 0;
         while (i < length) {
             struct inotify_event *event = (struct inotify_event *) &buffer[i];
-            if (event->len) {
-                if (event->mask & IN_CLOSE_WRITE) {
-                    if (!(event->mask & IN_ISDIR)) {
-                        printf("File Ready: %s\n", event->name);
+            if (event->len && (event->mask & IN_CLOSE_WRITE)) {
+                
+                // 3. Find the directory path associated with this watch descriptor
+                char *dir_path = "unknown";
+                for (size_t j = 0; j < watch_count; j++) {
+                    if (watches[j].wd == event->wd) {
+                        dir_path = watches[j].path;
+                        break;
                     }
+                }
+
+                // 4. Print the full path (Dir + Filename)
+                // Ensure there is a trailing slash handling
+                size_t len = strlen(dir_path);
+                if (len > 0 && dir_path[len-1] == '/') {
+                    printf("New File: %s%s\n", dir_path, event->name);
+                } else {
+                    printf("New File: %s/%s\n", dir_path, event->name);
                 }
             }
             i += EVENT_SIZE + event->len;
         }
     }
 
-    // Cleanup
     globfree(&glob_result);
     close(fd);
     return 0;
