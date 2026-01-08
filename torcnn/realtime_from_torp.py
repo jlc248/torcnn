@@ -10,6 +10,7 @@ import utils
 import time
 from datetime import datetime, timedelta
 import xarray as xr
+import collections
 import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -63,8 +64,8 @@ def find_new_files(listened_file, processed_list):
 def make_prediction_tensors(config, new_files, processed_list):
 
     """
-    Using the list of new_files, get the actual NEXRAD data and create a tensor
-    ready for predictions.
+    Using the list of new_files, get the actual NEXRAD data and create a dict 
+    of tensors ready for predictions.
 
     Args:
     - config (dict): model config dictionary, so we know which channels to get
@@ -72,7 +73,8 @@ def make_prediction_tensors(config, new_files, processed_list):
     - processed_list (list): The list to add each new_file to if it was successfully processed.
 
     Returns:
-    - tensor_list (numpy.ndarray): tensor ndarray; shape = (ndetects, ny, nx, nchannels)
+    - samples (dict): Contains the tensors with shape = (ndetects, ny, nx, nchannels)
+                      and associated lats and lons
     """
     
     bsinfo = config['byte_scaling_vals']
@@ -83,11 +85,10 @@ def make_prediction_tensors(config, new_files, processed_list):
     nchan = len(channels)
 
     # Dict for holding the tensor, lats, and lons for each torpfile
-    samples=1
-    # One tensor per torpfile, which will be aggregated at the end
-    tensor_list = []
- 
+    samples = collections.OrderedDict()
+
     for torpfile in new_files:
+        samples[torpfile] = {'lats':[], 'lons':[]}
 
         # Get the detect locations
         df = pd.read_csv(torpfile)
@@ -150,6 +151,9 @@ def make_prediction_tensors(config, new_files, processed_list):
                         # Remove this slice from the tensor and move on                
                         tensor = np.delete(tensor, ii, axis=0)
                         continue
+                    else:
+                        samples[torpfile]['lats'].append(lats[ii])
+                        samples[torpfile]['lats'].append(lons[ii])
 
                     if chIdx == 0: 
                         # Get range and range_inv on the first channel iteration. Also, make out_of_range_mask.
@@ -194,11 +198,39 @@ def make_prediction_tensors(config, new_files, processed_list):
                     tensor[ii, ..., chIdx] = rad_sector_scaled
 
         # The tensor for torpfile is ready
-        tensor_list.append(tensor)
+        if len(tensor.shape) == 4:
+            samples[torpfile]['tensor'] = tensor
+        else:
+            # Remove if no good objects
+            del samples[torpfile]
 
     logger.info('Created tensors')
 
-    return tensor_list
+    return samples
+
+
+#----------------------------------------------------------------------------------
+def predict(model, samples):
+    """
+    Make predictions from the tensors in samples (each sample is a torp file).
+
+    Args:
+    - model (TF model): The model to make predictions
+    - samples (dict): Contains the input predictions and lats/lons for the TORP detects.
+                      Predictions will be added to this.
+    """
+
+    # Here, we want to combine all of the tensors for predict efficiency.
+    # end_index will mark the index of the last object for each  torpfile
+    end_index = [0]
+
+    tensor_list = []
+    for torpfile, sample in samples.items():
+        end_index.append(end_index[-1] + len(sample['lats']))
+        tensor_list.append(sample['tensor'])
+
+    # Combine tensors and compute probs
+    super_tensor = np.vstack(tensor_list) 
 #----------------------------------------------------------------------------------
 
 def run_model(listened_file,
@@ -223,16 +255,14 @@ def run_model(listened_file,
             logger.info('There are {len(new_files)} new files to process...')
 
             # Create the prediction tensor with NEXRAD WDSS2 netcdf data
-            tensor_list = make_prediction_tensors(config, new_files, processed_list)
+            samples = make_prediction_tensors(config, new_files, processed_list)
 
-            for tl in tensor_list:
-                print(tl.shape)
+            if len(samples):
+                # Make predictions
+                predict(model, samples)
 
-            # Make predictions
-            #probs = model.predict(pred_tensor)
-
-            # Write the jsons
-            #write_outputs(probs, new_files)
+                # Write the jsons
+                #write_outputs(probs, new_files)
             
         logger.info('\nSleeping...')
         time.sleep(10)
