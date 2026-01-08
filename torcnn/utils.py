@@ -11,6 +11,7 @@ import errno
 import numpy as np
 from numba import jit
 import pickle
+import yaml
 #from pyhdf.SD import SD, SDC
 #----------------------------------------------------------------------------------------------------
 @jit(nopython=True)
@@ -18,7 +19,22 @@ def find_nearest(array, value):
     array = np.asarray(array)
     idx = (np.abs(array - value)).argmin()
     return idx, array[idx]
-
+#----------------------------------------------------------------------------------------------------
+def load_config_to_dict(filepath):
+    """
+    Opens a text file with key-value pairs and returns a python dictionary.
+    Handles nested dictionaries and lists automatically.
+    """
+    try:
+        with open(filepath, 'r') as file:
+            # Loader=yaml.SafeLoader ensures we don't execute arbitrary code
+            config_dict = yaml.load(file, Loader=yaml.SafeLoader)
+        return config_dict
+    except FileNotFoundError:
+        print(f"Error: The file at {filepath} was not found.")
+    except yaml.YAMLError as exc:
+        print(f"Error parsing YAML file: {exc}")
+    return None
 #----------------------------------------------------------------------------------------------------
 def bytescale(data_arr, vmin, vmax, min_byte_val=0, max_byte_val=255, dtype=np.uint8):
     """
