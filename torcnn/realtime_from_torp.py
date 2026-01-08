@@ -4,13 +4,19 @@ import pandas as pd
 import tensorflow as tf
 import glob
 import argparse
-import rad_utils
+import pickle
 from generate_tfrecs import get_sector_patch
 import utils
 import time
 from datetime import datetime, timedelta
+import xarray as xr
 import logging
 logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(name)s - %(levelname)s - %(message)s'
+)
+OUT_OF_RANGE = -999
 
 #----------------------------------------------------------------------------------
 def find_new_files(listened_file, processed_list):
@@ -70,14 +76,14 @@ def make_prediction_tensors(config, new_files, processed_list):
     """
     
     bsinfo = config['byte_scaling_vals']
-    tilt = 00.50
+    tilt = '00.50'
     n_az, n_gates = config['ps']
     hs = (n_az // 2, n_gates // 2)
     channels = config['channels']
     nchan = len(channels)
 
     # Dict for holding the tensor, lats, and lons for each torpfile
-    samples
+    samples=1
     # One tensor per torpfile, which will be aggregated at the end
     tensor_list = []
  
@@ -117,7 +123,7 @@ def make_prediction_tensors(config, new_files, processed_list):
                 all_files = glob.glob(f"{rootdir}/{chan}/{tilt}/*netcdf")
                 dts = [datetime.strptime(os.path.basename(ff), '%Y%m%d-%H%M%S.netcdf') for ff in all_files]
                 closest_dt = min(dts, key=lambda dt: abs(vel_dt - dt))
-                if abs(raddt - closest_dt).seconds > 180:
+                if abs(vel_dt - closest_dt).seconds > 180:
                     print(f"{vel_dt} is too far from {closest_dt}")
                     sys.exit(1)
                 idx = dts.index(closest_dt)
@@ -127,7 +133,7 @@ def make_prediction_tensors(config, new_files, processed_list):
                 radds = xr.open_dataset(file_path)
 
                 # Get the patches for each detect, and add them to the proper slices in tensor
-                for ii in range(lats):
+                for ii in range(len(lats)):
              
                     rad_sector, theta_sector, r_sector, az_idx, gate_idx = get_sector_patch(lat=lats[ii],
                                                                                             lon=lons[ii],
@@ -190,6 +196,8 @@ def make_prediction_tensors(config, new_files, processed_list):
         # The tensor for torpfile is ready
         tensor_list.append(tensor)
 
+    logger.info('Created tensors')
+
     return tensor_list
 #----------------------------------------------------------------------------------
 
@@ -202,7 +210,7 @@ def run_model(listened_file,
     ## Read TF model
     model = tf.keras.models.load_model(model_file, compile=False)
     ## Get the config file. Assume it's in the same directory.
-    config = utils.load_config_to_dict(f'{os.path.dirname(model_file)}/model_config.txt')
+    config = pickle.load(open(f'{os.path.dirname(model_file)}/model_config.pkl', 'rb'))
     ## Just a list to keep log of files we've processed
     processed_list = []
 
@@ -244,7 +252,7 @@ if __name__ == "__main__":
     )
     parser.add_argument('listened_file',
                         help="This file generates a new line when a TORP csv is created (per-radar per-time). " + \
-                             "E.g., /sas8tb/jcintineo/torcnn_output/logs/MAIN-TORPLIST-A1.log", 
+                             "E.g., /raid/sas8tb/jcintineo/torcnn_output/logs/MAIN-TORPLIST-A1.log", 
                         type=str
     )
     parser.add_argument('-m',
@@ -255,8 +263,8 @@ if __name__ == "__main__":
     )
     parser.add_argument('-o',
                         '--outpatt',
-                        help="Output pattern. Default = /sas8tb/jcintineo/torcnn_output/{radar}/%%Y/%%Y%%m%%d/torcnn_%%Y%%m%%d-%%H%%M%%S.json",
-                        default="/sas8tb/jcintineo/torcnn_output/{radar}/%Y/%Y%m%d/torcnn_%Y%m%d-%H%M%S.json",
+                        help="Output pattern. Default = /raid/sas8tb/jcintineo/torcnn_output/{radar}/%%Y/%%Y%%m%%d/torcnn_%%Y%%m%%d-%%H%%M%%S.json",
+                        default="/raid/sas8tb/jcintineo/torcnn_output/{radar}/%Y/%Y%m%d/torcnn_%Y%m%d-%H%M%S.json",
                         type=str
     )
     
