@@ -1,0 +1,34 @@
+
+There scripts read in a table produced by w2segmotionll (e.g. "CellTable"
+or "LightningTable") and produce KML files with trends or trend sets.
+
+Output data are pushed onto the LDM queue by default.  If you don't want to 
+do this, then modify the end of the script.
+
+Set these in a w2alg.conf to run indefinitely:
+
+group KML
+    manager PROCESS-TREND_LTGTABLE
+      set PROCESS_EXE "perl /home/wdssii/trends/trend_LightningTable.pl"
+
+    manager PROCESS-TREND_LTGTABLE1
+      set PROCESS_EXE "perl /home/wdssii/trends/trend_LightningTable_1.pl"
+
+The configuration for each trend set is done in the first few lines of the
+script:
+
+$data_dir = "/data/realtime/radar/multi";	# input data
+$table = "LightningTable";			# table name
+$subtype = "scale_0";				#subtype
+$history = 17;          # how many files back should we look?
+$outputDir = "/tmp/NALtrend";			#temp output
+
+
+# all data fields:
+@fields = ("MaxRef","MESH","MaxVIL","CGDensity","Reflectivity_-20C", "Size","VIL
+MA-2min", "FlashRate-2min","LowLvlShear", "MidLvlShear");
+
+#which fields should be put on the second Y axis instead of the first?
+@yaxis2 = ("Size","CGDensity","VILMA-2min","FlashRate-2min","MESH", "LowLvlShear
+", "MidLvlShear");
+

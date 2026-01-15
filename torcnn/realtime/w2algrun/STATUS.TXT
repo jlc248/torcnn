@@ -1,0 +1,32 @@
+# REST 2002
+#  -- Robert ES Toomey  Robert.Toomey@noaa.gov
+#
+w2alg status output:
+
+When you do a 'w2alg status' you get a list of identifiers and
+either 'not running' or a list of three processes.
+Something like the following:
+
+Identifier (group-name-process) => Processes (See STATUS.TXT)
+---------------------------------------------------------------
+GLOBAL-RSSD-A ==> (not running)
+KTLX-CLOCK1-A ==>  w2run(338)   xclock(1643)   w2logger(1644)
+KTLX-CLOCK2-A ==>  w2run(909)   oclock(1666)   w2logger(1667)
+TEST-XTERM1-A ==> (not running)
+TEST2-XTERM1-A ==> (not running)
+***COMPLETED STATUS
+
+
+w2run(338) means the process watcher has process id 338.  This
+is the process that keeps an eye on the 'real' process
+
+w2logger(1644) means the logger responsible for that process has
+id 1644. This is the process that autologs the output of the
+'real' process.
+
+Your 'real' process should show up as something like xclock(1643)
+for instance.  Also, with processes like RSSD that spawn children
+themselves, you may have multiple rssd(ids) listed.
+
+if you DONT see your 'real' process, but just the w2run(id), then
+most likely your process is dying as soon as it is started.

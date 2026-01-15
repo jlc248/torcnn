@@ -1,0 +1,39 @@
+#!/usr/bin/perl
+#--------------------------------------------------------------------------
+
+=head1 NAME
+
+w2alg - Run and monitor groups of radar based algorithms
+
+=head1 SYNOPSIS
+=head1 DESCRIPTION
+=head1 EXPORTABLE VARIABLES
+=head1 KNOWN BUGS
+=head1 AUTHORS
+=head1 COPYRIGHT
+=cut
+
+require 5.006;
+use strict;
+
+# Resolve possible symbolic link, use this path
+use FindBin qw($Bin $Script $RealBin $RealScript);
+use lib "$RealBin";
+
+# Process manager controller class
+use PControl;
+
+#--------------------------------------------------------------------------
+Main: {
+ if ((-e $PControl::LOGGER) && (-e $PControl::RUN)){
+   my $owner = new PControl();
+   $owner->initialize();
+ }else{
+   print<<ENDOFSETUP;
+Setup error.  Cannot find w2logger or w2run in $RealBin.
+
+Either run autogen.sh to compile w2logger.pl and w2run.pl into w2logger
+and w2run.  Or copy w2logger.pl to w2logger and w2run.pl to w2run
+ENDOFSETUP
+ }
+}
