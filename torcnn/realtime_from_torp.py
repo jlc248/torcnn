@@ -88,7 +88,6 @@ def make_prediction_tensors(config, new_files, processed_list):
     samples = collections.OrderedDict()
 
     for torpfile in new_files:
-        samples[torpfile] = {'lats':[], 'lons':[]}
 
         # Get the detect locations
         df = pd.read_csv(torpfile)
@@ -97,6 +96,9 @@ def make_prediction_tensors(config, new_files, processed_list):
         if np.isnan(lats).any() or np.isnan(lons).any():
             logger.warning(f'Missing coords in {torpfile}. Skipping.')
             continue
+        else:
+            # A sample gets instantiated so long as all lats and lons are valid.
+            samples[torpfile] = {'df':df, 'is_valid':np.full(len(lats), True)}
 
         # Create a numpy array for the tensor for the detects in THIS torpfile
         nsamples = len(lats)
@@ -108,6 +110,7 @@ def make_prediction_tensors(config, new_files, processed_list):
         # Assume Velocity is always used.
 
         vel_dt = datetime.strptime(os.path.basename(torpfile)[0:15], '%Y%m%d-%H%M%S')
+        samples[torpfile]['vel_dt'] = vel_dt
 
         # Root dir for data
         rootdir = os.path.dirname(torpfile).split('TORPcsv')[0]
@@ -148,12 +151,9 @@ def make_prediction_tensors(config, new_files, processed_list):
                         assert(rad_sector.shape == (hs[0]*2, hs[1]*2))
                     except AssertionError as err:
                         logger.warning(f'rad_sector.shape == {rad_sector.shape}, but should = {(hs[0]*2, hs[1]*2)}')
-                        # Remove this slice from the tensor and move on                
-                        tensor = np.delete(tensor, ii, axis=0)
+                        # This slice of the tensor will be 0s. Flag it. 
+                        samples[torpfile]['is_valid'][ii] = False
                         continue
-                    else:
-                        samples[torpfile]['lats'].append(lats[ii])
-                        samples[torpfile]['lats'].append(lons[ii])
 
                     if chIdx == 0: 
                         # Get range and range_inv on the first channel iteration. Also, make out_of_range_mask.
@@ -204,7 +204,7 @@ def make_prediction_tensors(config, new_files, processed_list):
             # Remove if no good objects
             del samples[torpfile]
 
-    logger.info('Created tensors')
+    logger.info(f'Created tensors for {len(samples)} files.')
 
     return samples
 
@@ -216,21 +216,71 @@ def predict(model, samples):
 
     Args:
     - model (TF model): The model to make predictions
-    - samples (dict): Contains the input predictions and lats/lons for the TORP detects.
+    - samples (dict): Contains the input predictions and is_valid flags for the TORP detects.
                       Predictions will be added to this.
+    Returns:
+    - probs (list): The list of probabilities (0 to 1).
     """
 
     # Here, we want to combine all of the tensors for predict efficiency.
-    # end_index will mark the index of the last object for each  torpfile
+    # end_index will mark the index of the last object for each torpfile
     end_index = [0]
 
     tensor_list = []
+    is_valid = []
     for torpfile, sample in samples.items():
-        end_index.append(end_index[-1] + len(sample['lats']))
+        end_index.append(end_index[-1] + len(sample['df']))
+        is_valid += sample['is_valid']
         tensor_list.append(sample['tensor'])
 
     # Combine tensors and compute probs
-    super_tensor = np.vstack(tensor_list) 
+    if len(tensor_list):
+        super_tensor = np.vstack(tensor_list) 
+
+        probs = model.predict(super_tensor, verbose=1)
+        probs[~is_valid] = -1 # invalid patches get assigned -1
+
+        del super_tensor, tensor_list
+
+        return probs, end_index
+    else:
+        logger.warning("No complete samples to predict!")
+        return [], []
+
+
+#----------------------------------------------------------------------------------
+def write_outputs(probs, samples, end_index, outpatt):
+    """
+    Write out amended TORP csvs.
+
+    Args:
+        probs (list): A list of float probabilities, 0 to 1. May be -1 if invalid.
+        samples (dict): Keys are the torpfiles (csvs). Contains the 'df' for each torpfile.
+        end_index (list): List of the final index in probs for each torpfile.
+        outpatt (str): Output directory pattern.
+    Returns:
+        None
+    """
+
+    cter = 1
+    for torpfile, sample in samples.items():
+
+        df = sample['df']
+        radar = df.radar[0]
+        # Assign the correct probs
+        df['torcnn_probability'] = probs[end_index[cter-1]:end_index[cter]]
+        # Iterate for next torpfile
+        cter += 1
+
+        outdir = sample['vel_dt'].strftime(outpatt).replace('{radar}',radar)
+        os.makedirs(outdir, exist_ok=True)
+        outbasefile = os.path.basename(torpfile).replace('short','torcnn')
+        outfile = f"{outdir}/{outbasefile}"
+
+        df.to_csv(outfile)
+        logger.info(f"Wrote {outfile}")
+
+
 #----------------------------------------------------------------------------------
 
 def run_model(listened_file,
@@ -243,7 +293,7 @@ def run_model(listened_file,
     model = tf.keras.models.load_model(model_file, compile=False)
     ## Get the config file. Assume it's in the same directory.
     config = pickle.load(open(f'{os.path.dirname(model_file)}/model_config.pkl', 'rb'))
-    ## Just a list to keep log of files we've processed
+    ## Just a list to keep a log of files we've processed
     processed_list = []
 
     while True:
@@ -253,21 +303,21 @@ def run_model(listened_file,
        
         if new_files: 
             logger.info('There are {len(new_files)} new files to process...')
-
-            # Create the prediction tensor with NEXRAD WDSS2 netcdf data
+        
+            # Create the prediction tensors with NEXRAD WDSS2 netcdf data.
+            # samples is a dict with each new_file as a key, pointing to the tensor at lats/lons
             samples = make_prediction_tensors(config, new_files, processed_list)
-
+            
             if len(samples):
                 # Make predictions
-                predict(model, samples)
+                probs, end_index = predict(model, samples)
 
-                # Write the jsons
-                #write_outputs(probs, new_files)
+                # Write the csvs
+                if len(probs):
+                    write_outputs(probs, samples, end_index, outpatt)
             
         logger.info('\nSleeping...')
         time.sleep(10)
-
-
 
 
 
@@ -293,8 +343,8 @@ if __name__ == "__main__":
     )
     parser.add_argument('-o',
                         '--outpatt',
-                        help="Output pattern. Default = /raid/sas8tb/jcintineo/torcnn_output/{radar}/%%Y/%%Y%%m%%d/torcnn_%%Y%%m%%d-%%H%%M%%S.json",
-                        default="/raid/sas8tb/jcintineo/torcnn_output/{radar}/%Y/%Y%m%d/torcnn_%Y%m%d-%H%M%S.json",
+                        help="Output directory pattern. Default = /raid/sas8tb/jcintineo/torcnn_output/products/{radar}/%%Y/%%Y%%m%%d/",
+                        default="/raid/sas8tb/jcintineo/torcnn_output/products/{radar}/%Y/%Y%m%d/",
                         type=str
     )
     
