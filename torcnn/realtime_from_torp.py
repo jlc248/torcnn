@@ -51,7 +51,7 @@ def find_new_files(listened_file, processed_list):
     for new_file in new_files[:]: 
         dt = datetime.strptime(os.path.basename(new_file)[0:15], '%Y%m%d-%H%M%S')
         if dt < expired or new_file in processed_list:
-            # If too old or already-processed that don't include it
+            # If too old or already-processed then don't include it
             new_files.remove(new_file)
            
         elif dt < expired and new_file in processed_list:
@@ -202,6 +202,7 @@ def make_prediction_tensors(config, new_files, processed_list):
         # The tensor for torpfile is ready
         if len(tensor.shape) == 4:
             samples[torpfile]['tensor'] = tensor
+            processed_list.append(torpfile)
         else:
             # Remove if no good objects
             del samples[torpfile]
@@ -229,10 +230,10 @@ def predict(model, samples):
     end_index = [0]
 
     tensor_list = []
-    is_valid = []
+    is_valid = np.array([], dtype=bool)
     for torpfile, sample in samples.items():
         end_index.append(end_index[-1] + len(sample['df']))
-        is_valid += sample['is_valid']
+        is_valid = np.concatenate((is_valid, sample['is_valid']))
         tensor_list.append(sample['tensor'])
 
     # Combine tensors and compute probs
@@ -304,7 +305,7 @@ def run_model(listened_file,
         new_files = find_new_files(listened_file, processed_list) 
        
         if new_files: 
-            logger.info('There are {len(new_files)} new files to process...')
+            logger.info(f'There are {len(new_files)} new files to process...')
         
             # Create the prediction tensors with NEXRAD WDSS2 netcdf data.
             # samples is a dict with each new_file as a key, pointing to the tensor at lats/lons
