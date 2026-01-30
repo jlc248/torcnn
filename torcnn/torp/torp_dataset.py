@@ -1,6 +1,7 @@
 from typing import Union, Optional, Literal
 from pathlib import Path
 
+import glob
 import pandas as pd 
 import os 
 
@@ -50,7 +51,46 @@ class TORPDataset:
         df = pd.concat(dfs, axis=0)
     
         return df
-        
+     
+
+class TORPDataset2:
+    '''
+    Utility class for loading the Tornado Algorithm CSV
+    files as a merged pandas.DataFrame
+
+    Attrs
+    -----------
+    dirpath : path-like, str : root dir where the data is stored
+    years : list of int : Which years to load.
+    dataset_type : 'WarningReportPreTornadoInfo' or 'WarningReportInfo': default = 'WarningReportInfo'
+        Storm reports are from NCEI, linearly interpolated to 1-min resolution,
+        and fit to the nearest AzShear max within 10 km.
+        Pre-tornadic are manually identified 0-60 min pre-tornadic tracks
+    '''
+    # List of all available years as separate CSV files
+    _DEFAULT_YEARS = [2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018]
+
+    def __init__(self,
+                 dirpath : PathLike,
+                 years : Optional[ListofStrOrInt ] = None,
+                 dataset_type : Literal['WarningReportPreTornadoInfo', 'WarningReportInfo'] = 'WarningReportInfo'
+                ):
+
+        self._years = years or self._DEFAULT_YEARS
+        self._dirpath = dirpath
+        self._dataset_type = dataset_type
+
+    def load_dataframe(self):
+
+        paths = []
+        for  y in self._years:
+            paths += glob.glob(os.path.join(self._dirpath, str(y), f'{y}??_tracks_{self._dataset_type}.csv'))
+
+        dfs = [pd.read_csv(p, low_memory=False) for p in paths]
+
+        df = pd.concat(dfs, axis=0)
+
+        return df   
 #dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/old', #'/work2/mflora/torp_datasets/ML_data',
 #                      years=[2011, 2013, 2014]
 #                     )

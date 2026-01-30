@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 import os,sys
 import tensorflow as tf
-from torp.torp_dataset import TORPDataset
+from torp.torp_dataset import TORPDataset2
 import utils
 import rad_utils
 import xarray
@@ -219,104 +219,89 @@ def collect_and_write_tfrec(row,
         year_thresh (int): The threshold such that >= year_thresh will use datapatt2. Default is 2019.
     """
 
-    if row['radar'] == '-99900':
+    if row['Radar'] == '-99900':
         return
 
     cols = row.keys()
 
     info = {} # contains predictor and target data, and metadata
-    info['stormID'] = row['stormID']
     info['az_hs'] = hs[0]
     info['range_hs'] = hs[1]
-    info['radarTimestamp'] = row['radarTimestamp']
-    info['radar'] = row['radar']
-    info['state'] = row['state']
-    info['county'] = row['county']
-    info['CWA'] = row['CWA']
-    info['stormType'] = row['stormType']
-    info['AzShear_max'] = row['AzShear_max']
-    info['AzShear_mean'] = row['AzShear_mean']
-    info['populationDensity_2pt5_min'] = row['populationDensity_2pt5_min']
+    info['Time'] = row['Time']
+    info['Radar'] = row['Radar']
+    info['RadarCWA'] = row['RadarCWA']
  
-    if 'tornadoWidth' in cols:
-        # StormReports csvs
-        info['obj_lat'] = row['latitudeExtractCenter']
-        info['obj_lon'] = row['longitudeExtractCenter']
-        info['rangeExtractCenter'] = row['rangeExtractCenter']                      # Range from the radar for the storm object
-        info['distToExtractCenter'] = row['distToExtractCenter']                    # distance to a report, in meter
-        info['tornado'] = row['tornado']
-        info['hail'] = row['hail']
-        info['wind'] = row['wind']
-        info['spout'] = row['spout']                                                    # landspout or waterspout
-        info['severeType'] = row['severeType']                                          # '-99900', 'Hail', 'Tornado', 'Wind'
-        info['tornadoWidth'] = row['tornadoWidth']
-        info['tornadoLength'] = row['tornadoLength']
-        info['durationMin'] = row['durationMin']                                        # Duration of the tornado in minutes
-        info['stormEventsReportID'] = row['stormEventsReportID']                        # From Storm Data: ID assigned by NWS for each individual storm event contained within a storm episode.
-        info['oneTorID'] = row['oneTorID']                                              # Common ID for all segments of a tornado. Same as the first segment's stormEventsReportID.
-        info['minutesFromReport'] = row['minutesFromReport']                            # The minimum minutes from either the start or end time of a report swath.
-        info['preTornadoTracked'] = row['preTornadoTracked']                            # was this stormID tracked pre-tornado?
-        info['overallWarningLeadTime'] = row['overallWarningLeadTime']
-        info['pointWarningLeadTime'] = row['pointWarningLeadTime']
-
-        if row['closestTorPointsInTime'] != '-99900':
-            parts = row['closestTorPointsInTime'].split(';;')
-            for pp in parts:
-                ss, tt = pp.split(':')
-                if float(ss) <= 100 and float(tt) <= 60:
-                    return
-        if row['closestTorPointsInSpace'] != '-99900':
-            parts = row['closestTorPointsInSpace'].split(';;')
-            for pp in parts:
-                ss, tt = pp.split(':')
-                if float(ss) <= 100 and float(tt) <= 60:
-                    return
-
-        info['magnitude'] = -1 if row['magnitude'] == 'U' else float(row['magnitude'])
-        if row['spout']:
-            label = 'spout'
-        elif row['tornado']:
-            label = 'tor'
-        else:
-            label = 'nontor'
+    info['obj_lat'] = row['Lat']
+    info['obj_lon'] = row['Lon']
+    info['RangeKm'] = row['RangeKm']                                                # Range from the radar for the storm object
+    info['iAzCenter'] = row['iAzCenter']                                            # the Azimuth coord index
+    info['iRanCenter'] = row['iRanCenter']                                          # the Range coord index
+    info['V_rot'] = row['V_rot']
+    info['V_rotDistance'] = row['V_rotDistance']
+    info['Elev'] = row['Elev']
+    info['tornado'] = row['tornado']
+    info['hail'] = row['hail']
+    info['wind'] = row['wind']
+    info['spout'] = row['spout']                                                    # landspout or waterspout
+    info['maghail'] = row['maghail']
+    info['magwind'] = row['magwind']
+    info['magtornado'] = -1 if row['magtornado'] == 'U' else float(row['magtornado'])
+    info['severeWarned'] = row['severeWarned']
+    info['tornadoWarned'] = row['tornadoWarned']
+    info['marineWarned'] = row['marineWarned']    
+    info['TrackDist'] = row['TrackDist']                                            # Track distance...in km?
+    try:
+        info['pretor'] = row['pretor']
+        if info['pretor']:
+            info['tornado'] = 1 # NB the TORP csvs say tornado=0 for each pretor sample
+    except AttributeError:
+        info['pretor'] = 0   
+ 
+    if row['spout']:
+        label = 'spout'
+    elif row['tornado']:
+        label = 'tor'
+    elif info['pretor']:
+        label = 'pretor'
+    elif row['hail']:
+        label = 'hail'
+    elif row['wind']:
+        label = 'wind'
     else:
-        # pretornado csvs
-        info['obj_lat'] = row['latitudeAzShearMax']
-        info['obj_lon'] = row['longitudeAzShearMax']
-        info['rangeExtractCenter'] = row['rangeAzShearMax']
-        info['distToExtractCenter'] = row['distToAzShearMax']
-        info['minPreTornado'] = row['minPreTornado']
-        info['tornado'] = 1 # NB the TORP csvs say tornado=0 for each pretor sample
-        ceil_minPreTor = int(np.ceil(row['minPreTornado'] / 15) * 15)
-        if ceil_minPreTor == 0:
-            ceil_minPreTor = 15
-        elif ceil_minPreTor > 60:
-            ceil_minPreTor = 120
-        label = f'pretor_{ceil_minPreTor}'
+        label = 'nonsev'
+    
+    ## pretornado csvs
+    #info['minPreTornado'] = row['minPreTornado']
+    #ceil_minPreTor = int(np.ceil(row['minPreTornado'] / 15) * 15)
+    #if ceil_minPreTor == 0:
+    #    ceil_minPreTor = 15
+    #elif ceil_minPreTor > 60:
+    #    ceil_minPreTor = 120
+    #label = f'pretor_{ceil_minPreTor}'
 
     # Anchoring timestamp
-    raddt = datetime.strptime(row['radarTimestamp'], '%Y%m%d-%H%M%S')
+    raddt = datetime.strptime(row['Time'], '%Y%m%d-%H%M%S')
 
     for ii, varname in enumerate(varnames):
         # Check datapatt2 if defined
         if datapatt2:
-            if row['year'] >= year_thresh:
+            if int(info['Time'][0:4]) >= year_thresh:
                 datapatt = datapatt2 
             else:
                 datapatt = datapatt1
         else:
             datapatt = datapatt1
 
-        dpat = datapatt.replace('{radar}', row['radar']).replace('{varname}', varname)
+        dpat = datapatt.replace('{radar}', row['Radar']).replace('{varname}', varname)
         all_files = glob.glob(raddt.strftime(f"{os.path.dirname(dpat)}/*netcdf"))
         dts = [datetime.strptime(os.path.basename(ff), '%Y%m%d-%H%M%S.netcdf') for ff in all_files]
         try:
             closest_dt = min(dts, key=lambda dt: abs(raddt - dt))
         except ValueError:
-            logging.error(f"ValueError: no closest_dt, {row['radar']}, {row['radarTimestamp']}")
+            logging.error(f"ValueError: no closest_dt, {row['Radar']}, {row['Time']}")
             return
         if abs(raddt - closest_dt).seconds > 600:
-            logging.error(f"{raddt} is too far from {closest_dt}. {row['radar']} - {varname}")
+            logging.error(f"{raddt} is too far from {closest_dt}. {row['Radar']} - {varname}")
             return
         idx = dts.index(closest_dt)
         file_path = all_files[idx]
@@ -324,8 +309,8 @@ def collect_and_write_tfrec(row,
         # Open the netCDF file using xarray
         radds = xr.open_dataset(file_path)
 
-        rad_sector, theta_sector, r_sector, az_idx, gate_idx = get_sector_patch(lat=row['latitude'],
-                                                                                lon=row['longitude'],
+        rad_sector, theta_sector, r_sector, az_idx, gate_idx = get_sector_patch(lat=row['Lat'],
+                                                                                lon=row['Lon'],
                                                                                 ds=radds,
                                                                                 hs=hs,
                                                                                 varname=varname
@@ -335,7 +320,7 @@ def collect_and_write_tfrec(row,
         try:
             assert(rad_sector.shape == (hs[0]*2, hs[1]*2))
         except AssertionError as err:
-            print(f"{row['radar']}, {row['radarTimestamp']}, {varname}.shape == {rad_sector.shape}")
+            print(f"{row['Radar']}, {row['Time']}, {varname}.shape == {rad_sector.shape}")
             return
 
         if ii == 0:
@@ -377,7 +362,7 @@ def collect_and_write_tfrec(row,
     # Write out the tfrec
     outdir = f"{raddt.strftime(outpatt)}/{label}"
     os.makedirs(outdir, exist_ok=True)
-    outfile = f"{outdir}/{row['radar']}_{np.round(row['latitude'],2)}_{np.round(row['longitude'],2)}_{row['radarTimestamp']}.tfrec"
+    outfile = f"{outdir}/{row['Radar']}_{np.round(row['Lat'],2)}_{np.round(row['Lon'],2)}_{row['Time']}.tfrec"
 
     with tf.io.TFRecordWriter(outfile) as writer:
         example = create_example(info)
@@ -392,25 +377,19 @@ if __name__ == "__main__":
 
     # Drive the parallel processing
     
-    dataset_type = 'Storm_Reports' # 'Storm_Reports' or 'pretornadic'
+    dataset_type = 'WarningReportPreTornadoInfo' # 'WarningReportPreTornadoInfo' or 'WarningReportInfo'
     
     # Load torp dataset
-    dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/',
+    dataset = TORPDataset2(dirpath='/work2/jcintineo/TORP/',
                           #years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018],
-                          years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
+                          years=[2011], #, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
                           dataset_type=dataset_type
     )
     ds = dataset.load_dataframe()
     
-    try: 
-        # Make EFU = -1
-        ds.loc[ds.magnitude == 'U', 'magnitude'] = -1
-        # Convert to numeric
-        ds.magnitude = pd.to_numeric(ds.magnitude)
-    except AttributeError as err:
-        logging.error(str(err))
-        logging.warning('continuing...')
-    
+    ds.loc[ds.magtornado == 'U', 'magtornado'] = -1
+    # Convert to numeric
+    ds.magtornado = pd.to_numeric(ds.magtornado)
     
     
     # 2011-2018
@@ -418,7 +397,7 @@ if __name__ == "__main__":
     # 2019-2024
     datapatt2 = '/myrorss2/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
     
-    outpatt = f'/raid/jcintineo/torcnn/tfrecs_100km1hr/%Y/%Y%m%d/'
+    outpatt = f'/work2/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
     
     hs = halfsize = (64, 128)
     
