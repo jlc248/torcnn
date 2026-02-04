@@ -83,6 +83,7 @@ class TORPDataset2:
     def load_dataframe(self):
 
         paths = []
+        # Assumes year in path!
         for  y in self._years:
             paths += glob.glob(os.path.join(self._dirpath, str(y), f'{y}??_tracks_{self._dataset_type}.csv'))
 

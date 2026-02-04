@@ -254,7 +254,7 @@ def collect_and_write_tfrec(row,
         info['pretor'] = row['pretor']
         if info['pretor']:
             info['tornado'] = 1 # NB the TORP csvs say tornado=0 for each pretor sample
-    except AttributeError:
+    except (KeyError, AttributeError) as err:
         info['pretor'] = 0   
  
     if row['spout']:
@@ -262,23 +262,21 @@ def collect_and_write_tfrec(row,
     elif row['tornado']:
         label = 'tor'
     elif info['pretor']:
-        label = 'pretor'
+        info['pretorMinutes'] = row['pretorMinutes']
+        ceil_pretorMinutes = int(np.ceil(row['pretorMinutes'] / 15) * 15)
+        if ceil_pretorMinutes == 0:
+            ceil_pretorMinutes = 15
+        elif ceil_pretorMinutes > 60:
+            ceil_pretorMinutes = 120
+        label = f'pretor_{ceil_pretorMinutes}'
     elif row['hail']:
         label = 'hail'
     elif row['wind']:
         label = 'wind'
     else:
         label = 'nonsev'
-    
-    ## pretornado csvs
-    #info['minPreTornado'] = row['minPreTornado']
-    #ceil_minPreTor = int(np.ceil(row['minPreTornado'] / 15) * 15)
-    #if ceil_minPreTor == 0:
-    #    ceil_minPreTor = 15
-    #elif ceil_minPreTor > 60:
-    #    ceil_minPreTor = 120
-    #label = f'pretor_{ceil_minPreTor}'
-
+   
+ 
     # Anchoring timestamp
     raddt = datetime.strptime(row['Time'], '%Y%m%d-%H%M%S')
 
@@ -382,7 +380,7 @@ if __name__ == "__main__":
     # Load torp dataset
     dataset = TORPDataset2(dirpath='/work2/jcintineo/TORP/',
                           #years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018],
-                          years=[2011], #, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
+                          years=[2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
                           dataset_type=dataset_type
     )
     ds = dataset.load_dataframe()
