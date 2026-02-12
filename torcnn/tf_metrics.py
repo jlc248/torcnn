@@ -21,9 +21,9 @@ class csi(tf.keras.metrics.Metric):
         self.index = index
         
         # State variables to accumulate true positives, false positives, and false negatives
-        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float32)
-        self.false_positives = self.add_weight(name='false_positives', initializer='zeros', dtype=tf.float32)
-        self.false_negatives = self.add_weight(name='false_negatives', initializer='zeros', dtype=tf.float32)
+        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float64)
+        self.false_positives = self.add_weight(name='false_positives', initializer='zeros', dtype=tf.float64)
+        self.false_negatives = self.add_weight(name='false_negatives', initializer='zeros', dtype=tf.float64)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
@@ -112,8 +112,8 @@ class pod(tf.keras.metrics.Metric):
         self.index = index
         
         # State variables to accumulate true positives and false negatives
-        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float32)
-        self.false_negatives = self.add_weight(name='false_negatives', initializer='zeros', dtype=tf.float32)
+        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float64)
+        self.false_negatives = self.add_weight(name='false_negatives', initializer='zeros', dtype=tf.float64)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
@@ -199,8 +199,8 @@ class far(tf.keras.metrics.Metric):
         self.index = index
         
         # State variables to accumulate true positives and false positives
-        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float32)
-        self.false_positives = self.add_weight(name='false_positives', initializer='zeros', dtype=tf.float32)
+        self.true_positives = self.add_weight(name='true_positives', initializer='zeros', dtype=tf.float64)
+        self.false_positives = self.add_weight(name='false_positives', initializer='zeros', dtype=tf.float64)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
@@ -318,8 +318,8 @@ class BrierScore(tf.keras.metrics.Metric):
         super().__init__(name=name, **kwargs)
         self.index = index
         # Use Mean for weighted average of the squared errors
-        self.total_squared_error = self.add_weight(name='total_squared_error', initializer='zeros', dtype=tf.float32)
-        self.total_weight = self.add_weight(name='total_weight', initializer='zeros', dtype=tf.float32)
+        self.total_squared_error = self.add_weight(name='total_squared_error', initializer='zeros', dtype=tf.float64)
+        self.total_weight = self.add_weight(name='total_weight', initializer='zeros', dtype=tf.float64)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
