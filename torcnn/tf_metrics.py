@@ -82,6 +82,15 @@ class csi(tf.keras.metrics.Metric):
         self.false_positives.assign(0.0)
         self.false_negatives.assign(0.0)
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "use_soft_discretization": self.use_soft_discretization,
+            "hard_discretization_threshold": self.hard_discretization_threshold,
+            "index": self.index,
+        })
+        return config
+
 #------------------------------------------------------------------------------------------------
 
 @keras.saving.register_keras_serializable()
@@ -158,6 +167,15 @@ class pod(tf.keras.metrics.Metric):
         # Reset the state variables at the start of each new epoch
         self.true_positives.assign(0.0)
         self.false_negatives.assign(0.0)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "use_soft_discretization": self.use_soft_discretization,
+            "hard_discretization_threshold": self.hard_discretization_threshold,
+            "index": self.index,
+        })
+        return config
 
 
 #------------------------------------------------------------------------------------------------
@@ -237,6 +255,15 @@ class far(tf.keras.metrics.Metric):
         self.true_positives.assign(0.0)
         self.false_positives.assign(0.0)
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "use_soft_discretization": self.use_soft_discretization,
+            "hard_discretization_threshold": self.hard_discretization_threshold,
+            "index": self.index,
+        })
+        return config
+
 
 #------------------------------------------------------------------------------------------------
 
@@ -245,7 +272,8 @@ class AUC(tf.keras.metrics.Metric):
     def __init__(self, name='aupr', curve='PR', index=0, **kwargs):
         super().__init__(name=name, **kwargs)
         self.index = index
-        self.auc_metric = tf.keras.metrics.AUC(name=f'_auc_internal_channel{self.index}', curve=curve)
+        self.curve = curve
+        self.auc_metric = tf.keras.metrics.AUC(name=f'_auc_internal_channel{self.index}', curve=self.curve)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Determine the rank of the tensors.
@@ -274,6 +302,14 @@ class AUC(tf.keras.metrics.Metric):
 
     def reset_state(self):
         self.auc_metric.reset_state()
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "curve": self.curve,
+            "index": self.index,
+        })
+        return config
 #------------------------------------------------------------------------------------------------
 
 @keras.saving.register_keras_serializable()
@@ -331,6 +367,13 @@ class BrierScore(tf.keras.metrics.Metric):
     def reset_state(self):
         self.total_squared_error.assign(0.0)
         self.total_weight.assign(0.0)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "index": self.index,
+        })
+        return config
 
 #------------------------------------------------------------------------------------------------
 
@@ -394,9 +437,16 @@ class ObsCt(tf.keras.metrics.Metric):
         """
         self.total_hits.assign(0.0)
 
-#------------------------------------------------------------------------------------------------
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "threshold1":self.threshold1,
+            "threshold2":self.threshold2,
+            "index": self.index,
+        })
+        return config
 
-import tensorflow as tf
+#------------------------------------------------------------------------------------------------
 
 @keras.saving.register_keras_serializable()
 class FcstCt(tf.keras.metrics.Metric):
@@ -458,5 +508,14 @@ class FcstCt(tf.keras.metrics.Metric):
         Resets all metric state variables.
         """
         self.total_valid_preds.assign(0.0)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "threshold1":self.threshold1,
+            "threshold2":self.threshold2,
+            "index": self.index,
+        })
+        return config
 
 #------------------------------------------------------------------------------------------------

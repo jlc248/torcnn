@@ -1,0 +1,8 @@
+Index	Name	       Activation	Physical Meaning
+0	Objectness     Sigmoid  	"Is there a circulation of any kind here?"
+1	Rel X	       Sigmoid  	Center X-offset within this specific cell.
+2	Rel Y	       Sigmoid  	Center Y-offset within this specific cell.
+3	Width	       Exponential	Scaled width of the circulation box.
+4	Height	       Exponential	Scaled height of the circulation box.
+5	Class 0 Score  Sigmoid/Softmax	"If there's an object, is it a TVS?"
+6	Class 1 Score  Sigmoid/Softmax	"If there's an object, is it Non-Tornadic?"

@@ -60,11 +60,7 @@ PS = config['ps']
 try: STD = config['img_aug']['random_noise']
 except KeyError: pass
 
-byte_scaling_vals = config['byte_scaling_vals']
-
-# get bsinfo for scalars
-if SCALAR_VARS:
-    bsinfo = utils.get_bsinfo()
+BSINFO = utils.get_bsinfo()
 
 ##################################################################################################################
 def tf_bytescale(data_arr, vmin, vmax, min_byte_val=0, max_byte_val=255):
@@ -108,93 +104,100 @@ def tf_bytescale(data_arr, vmin, vmax, min_byte_val=0, max_byte_val=255):
     # Cast to tf.uint8 as the final output.
     return tf.cast(rounded_data, tf.uint8)
 
-##################################################################################################################
-def parse_tfrecord_fn(example):
+#################################################################################################################################
+def normalize_channel(tensor, channel_name):
+    info = BSINFO[channel_name]
+    c_min = info['vmin']
+    c_max = info['vmax']
 
-    feature_description = {}
-   
-    # Define the target features 
-    for target in TARGETS:           
-        feature_description[target] = tf.io.FixedLenFeature([1], tf.int64)
+    # Cast to float
+    #tensor = tf.cast(tensor, tf.float32)
 
-    # Define scalar predictor features
-    for scalar_var in SCALAR_VARS:
-        feature_description[scalar_var] = tf.io.FixedLenFeature([1], tf.float32)
-    
-    # Define the n-D predictor features
-    for inp in INPUTS:
-        for chan in inp:
-            if chan != 'range_inv':
-                feature_description[chan] =  tf.io.FixedLenFeature([], tf.string)
+    # First, assume the uint8 (0-255) maps to the min/max range
+    # Scaling uint8 to the physical units first:
+    physical = (tensor / 255.0) * (c_max - c_min) + c_min
 
-    # Parse the single example
-    features = tf.io.parse_single_example(example, feature_description)
+    if channel_name == 'Velocity':
+        # Scale physical -80 to 80 -> -1.0 to 1.0
+        # Formula: (val - center) / half_range
+        normalized = physical / max(abs(c_min), abs(c_max))
+    else:
+        # Scale physical min to max -> 0.0 to 1.0
+        # Formula: (val - min) / (max - min)
+        normalized = (physical - c_min) / (c_max - c_min)
 
-    # Reshape the n-D inputs
-    for inp in INPUTS:
-        for chan in inp:
-            if chan == 'range':
-                features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[1],1])  
-            elif chan == 'range_inv':
-                # tf.identity copies the tensor ('range' must be before 'range_inv' in input_tuples[x])
-                features[chan] = tf.identity(features['range'])
-            else:
-                features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[0], PS[1],1])
+    return tf.clip_by_value(normalized, -1.0 if channel_name == 'Velocity' else 0.0, 1.0)
+#################################################################################################################################
+# Moved feature_description outside for efficiency
+feature_description = {}
+for target in TARGETS:
+    feature_description[target] = tf.io.FixedLenFeature([1], tf.int64)
+for scalar_var in SCALAR_VARS:
+    feature_description[scalar_var] = tf.io.FixedLenFeature([1], tf.float32)
+for inp in INPUTS:
+    for chan in inp:
+        if chan != 'range_inv':
+            feature_description[chan] = tf.io.FixedLenFeature([], tf.string)
 
-    return features
-##################################################################################################################
-def prepare_sample(features):
+def parse_and_prepare(example_proto):
 
-    # binarize targets and create sample_weight or mask
+    # Parse the record
+    features = tf.io.parse_single_example(example_proto, feature_description)
+
+    # Process Targets
     for ii, target in enumerate(TARGETS):
-        targetTmp = features[target]  
+        targetTmp = features[target]
         if ii == 0:
             targetInt = targetTmp
         else:
             targetInt = tf.stack([targetInt, targetTmp])
 
+    # Process Inputs
+    processed_inputs = {}
 
-    inputs = {}
+    # Pre-parse tensors to avoid repeated work
+    parsed_tensors = {}
+    for inp in INPUTS:
+        for chan in inp:
+            if chan == 'range':
+                parsed_tensors[chan] = tf.cast(tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[1], 1]), tf.float32)
+            elif chan == 'range_inv':
+                # Just a placeholder, logic handled below
+                continue 
+            else:
+                parsed_tensors[chan] = tf.cast(tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[0], PS[1], 1]), tf.float32)
+            if chan != 'range_folded_mask' and chan != 'out_of_range_mask':
+                parsed_tensors[chan] = normalize_channel(parsed_tensors[chan], chan)
 
-    # These Inputs are already byte-scaled
-    for ii,inp in enumerate(INPUTS):  #for each keras.Input in the model construction
-        for chIdx, varname in enumerate(inp):             #for each channel in the tf.layers.Input
-
-            data = tf.cast(features[varname], tf.float32)
-
-            # Handle the coordinate features
-            # Duplicate the 1D range vector (and range_inv) n_azimuths times 
+    # Build 'radar' and 'coords' inputs
+    # Assuming INPUTS[0] is radar and INPUTS[1] is coords
+    for ii, inp_group in enumerate(INPUTS):
+        group_tensors = []
+        for varname in inp_group:
             if varname == 'range':
+                data = parsed_tensors['range']
                 data = tf.repeat(tf.expand_dims(data, axis=0), repeats=PS[0], axis=0)
             elif varname == 'range_inv':
+                # Use the 'range' data for the inversion
+                data = parsed_tensors['range']
                 data = tf.repeat(tf.expand_dims(1.0 / data, axis=0), repeats=PS[0], axis=0)
-                
-
-            if chIdx == 0:
-                tensor = data
             else:
-                tensor = tf.concat([tensor, data], axis=2)
+                data = parsed_tensors[varname]
+            group_tensors.append(data)
+        
+        # Concat along channel axis (axis=2)
+        key = 'radar' if ii == 0 else 'coords'
+        processed_inputs[key] = tf.concat(group_tensors, axis=-1)
 
-        if ii == 0:
-            inputs['radar'] = tensor
-        elif ii == 1:
-            inputs['coords'] = tensor
-
-
+    # Process Scalars
     if SCALAR_VARS:
-        # These need to be normalized/scaled
-        for idx,scalar_var in enumerate(SCALAR_VARS): 
-            scalarTmp = tf_bytescale(features[scalar_var], bsinfo[scalar_var]['vmin'], bsinfo[scalar_var]['vmax'])
-            if idx == 0:
-                scalars = scalarTmp
-            else:
-                scalars = tf.stack([scalars, scalarTmp])
-        # Using ii from block above
-        inputs['scalars'] = scalars
+        scalar_list = []
+        for var in SCALAR_VARS:
+            val = tf_bytescale(features[var], BSINFO[var]['vmin'], BSINFO[var]['vmax'])
+            scalar_list.append(val)
+        processed_inputs['scalars'] = tf.stack(scalar_list)
 
-    # Sample weight should be same shape as targetInt
-    return inputs, targetInt #, sample_weight
-
+    return processed_inputs, targetInt
 #################################################################################################################################
 def apply_augmentations(input_dict, target_img):
     """Apply data augmentations
@@ -290,14 +293,51 @@ def find_corrupted_tfrecords(all_files):
 
 
 #################################################################################################################################
-# Train: Create list of training datasets
+def get_dataset(filenames, batch_size, training=False):
+
+    dataset = tf.data.Dataset.from_tensor_slices(filenames)
+    
+    # Shuffle the list of shard filenames
+    if training:
+        dataset = dataset.shuffle(len(filenames))
+    
+        # Repeat here to keep the file-stream infinite
+        dataset = dataset.repeat()
+
+    # Interleave reading from multiple shards
+    ## By setting deterministic=False in the interleave, you allow the pipeline to return
+    ## whichever shard's data is ready first. This prevents one slow I/O seek from
+    ## blocking the entire pipeline.
+    dataset = dataset.interleave(
+        lambda x: tf.data.TFRecordDataset(x, num_parallel_reads=tf.data.AUTOTUNE),
+        cycle_length=tf.data.AUTOTUNE,
+        num_parallel_calls=tf.data.AUTOTUNE,
+        deterministic=False
+    )
+
+    if training:
+        # SHUFFLE 2: The "Micro" Shuffle
+        # Mixes individual samples from all the shards opened in step 4.
+        # 10,000 samples = ~2.5GB RAM for 250kB samples.
+        dataset = dataset.shuffle(buffer_size=10000)   
+ 
+    dataset = dataset.map(parse_and_prepare, num_parallel_calls=tf.data.AUTOTUNE)
+   
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    
+    # Setting AutoShardPolicy
+    ## Use FILE if number of shards >> number of GPUs.
+    ## Use DATA only if you have a tiny number of massive files.
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.FILE 
+    dataset = dataset.with_options(options)
+
+    return dataset
+#################################################################################################################################
+#################################################################################################################################
+
 print('\nBuilding training Dataset')
-
-AUTOTUNE=tf.data.AUTOTUNE
-BUFFER_SIZE = 16 * 1024**2 # 16MB
-
-print(config['train_list'])
-
 #train_filenames = tf.io.gfile.glob(config['train_list'])
 # Use a list comprehension to glob both patterns, as the tf.io.gfile.glob was segfaulting
 # tf.io.gfile.glob when using a variety of sources, like cloud and local.
@@ -305,34 +345,21 @@ print(config['train_list'])
 train_filenames = []
 for pattern in config['train_list']:
     train_filenames.extend(glob.glob(pattern))
+train_ds = get_dataset(train_filenames, BATCHSIZE, training=True)
 
-# Uncomment to find corrupted tfrecords
-#find_corrupted_tfrecords(train_filenames)
-#sys.exit()
-
-n_tsamples = len(train_filenames)
-print('n_tsamples',n_tsamples)
+n_tsamples = config['n_tsamples']
 steps_per_epoch = n_tsamples // BATCHSIZE
 print('steps_per_epoch:', steps_per_epoch)
 
-train_ds = (tf.data.TFRecordDataset(train_filenames, num_parallel_reads=AUTOTUNE, buffer_size=BUFFER_SIZE)
-           .shuffle(1024)
-           .repeat()
-           .map(parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
-           .map(prepare_sample, num_parallel_calls=AUTOTUNE)
-           .batch(BATCHSIZE)
-           .prefetch(AUTOTUNE)
-)
-
 
 # Augment data (optional)
-if 'random_rotation' in config['img_aug']:
-    aug_ds = train_ds.map(apply_augmentations, num_parallel_calls=AUTOTUNE)
-    # Concatenate the original and augmented datasets (doubles dataset)
-    train_ds = train_ds.concatenate(aug_ds)
-    del aug_ds
-if 'random_noise' in config['img_aug']: #original and concatenated augmentations are noised
-    train_ds = train_ds.map(apply_noise, num_parallel_calls=AUTOTUNE)
+#if 'random_rotation' in config['img_aug']:
+#    aug_ds = train_ds.map(apply_augmentations, num_parallel_calls=AUTOTUNE)
+#    # Concatenate the original and augmented datasets (doubles dataset)
+#    train_ds = train_ds.concatenate(aug_ds)
+#    del aug_ds
+#if 'random_noise' in config['img_aug']: #original and concatenated augmentations are noised
+#    train_ds = train_ds.map(apply_noise, num_parallel_calls=AUTOTUNE)
 
 # For quick_looks or error-checking
 #for inputs,labels in train_ds:
@@ -353,33 +380,15 @@ if 'random_noise' in config['img_aug']: #original and concatenated augmentations
 #    sys.exit()
 
 print('\nBuilding validation Dataset')
+val_filenames = []
+for pattern in config['val_list']:
+    val_filenames.extend(glob.glob(pattern))
+val_ds = get_dataset(val_filenames, BATCHSIZE, training=False)
 
 outdir = config['outdir']
 if not args.model:
     os.makedirs(outdir)
 
-# Change AutoShard policy. Not exactly sure what this does, but it at least gets rid of annoying warning messages.
-options = tf.data.Options()
-options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
-train_ds = train_ds.with_options(options)
-
-#val_filenames = tf.io.gfile.glob(config['val_list'])
-# Use a list comprehension to glob both patterns, as the tf.io.gfile.glob was segfaulting
-# tf.io.gfile.glob when using a variety of sources, like cloud and local.
-# glob.glob will only work on local disk.
-val_filenames = []
-for pattern in config['val_list']:
-    val_filenames.extend(glob.glob(pattern))
-n_vsamples = len(val_filenames)
-print('n_vsamples',n_vsamples)
-
-val_ds = (tf.data.TFRecordDataset(val_filenames, num_parallel_reads=AUTOTUNE, buffer_size=BUFFER_SIZE)
-           .map(parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
-           .map(prepare_sample, num_parallel_calls=AUTOTUNE)
-           .batch(BATCHSIZE)
-           .prefetch(AUTOTUNE)
-)
-val_ds = val_ds.with_options(options)
 
 
 # Print out config options
@@ -387,8 +396,6 @@ ofile = os.path.join(outdir,'model_config.txt')
 of = open(ofile,'w')
 for key, value in config.items():
     of.write(str(key) + ': ' + str(value) + '\n')
-of.write(f"Number of training samples: {n_tsamples}\n")
-of.write(f"Number of validation samples: {n_vsamples}\n")
 of.close()
 pickle.dump(config,open(os.path.join(outdir,'model_config.pkl'),'wb'))
 
@@ -449,7 +456,8 @@ history = conv_model.fit(
           epochs=config['nepoch'],
           validation_data=val_ds,
           initial_epoch=initial_epoch,
-          callbacks=callbacks)
+          callbacks=callbacks
+)
 #shuffle has no effect if generator OR a tf.data.Dataset
 
 logging.info('Saving model and training history...')

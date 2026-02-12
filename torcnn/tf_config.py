@@ -12,26 +12,48 @@ def tf_config():
     cnn = 'cnn'
   
     inputs = []
-  
+
+    # The number of records/samples, NOT the number of files.
+    # Find this apriori for sharded datasets using count_records.py
+    ## output of count_records.py
+    cts = pickle.load(open('sample_counts.pickle','rb'))
+    train_years = np.arange(2011,2019,1, dtype=int)
+    val_years = [2019]
+    pos_classes = ['tor', 'pretor_15', 'pretor_30']
+    neg_classes = ['hail', 'wind', 'nonsev']
+    n_tsamples = 0
+    for yy in train_years:
+        for cl in pos_classes + neg_classes:
+            n_tsamples += cts[str(yy)][cl]
+    n_vsamples = 0
+    for yy in val_years:
+        for cl in pos_classes + neg_classes:
+            n_vsamples += cts[str(yy)][cl]
+    
     # For conventional CNNs
-  
     if cnn == 'cnn':
         ngpu = 1
         batchsize = max([ngpu,1]) * 256
         targets = ['tornado']
   
-        tfrec_dir = "/raid/jcintineo/torcnn/tfrecs_100km1hr"
+        tfrec_dir = "/work2/jcintineo/torcnn/tfrecs_shard"
         # N.B. Can't have any "//" in the train_list or val_list!!!
-        # subdirs: nontor, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
-        train_list = [f"{tfrec_dir}/201[1-9]/2*/[n,t]*/*tfrec", f"{tfrec_dir}/202[0-2]/2*/[n,t]*/*tfrec",] # f"{tfrec_dir}/201[1-6]/2*/pretor*/*tfrec"]
-        val_list = [f"{tfrec_dir}/2023/2*/[n,t]*/*.tfrec",] #f"{tfrec_dir}/2017/2*/pretor*/*tfrec"]
+        # subdirs: hail, wind, nonsev, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
+        train_list = []
+        for yy in train_years:
+            for cl in pos_classes + neg_classes:
+                train_list.append(f"{tfrec_dir}/{yy}/{yy}0610_{cl}*tfrec")
+        val_list = []
+        for yy in val_years:
+            for cl in pos_classes + neg_classes:
+                val_list.append(f"{tfrec_dir}/{yy}/{yy}0610_{cl}*tfrec") 
 
-        outprefix = '/raid/jcintineo/torcnn/tests/2011-23/'
-        outdir = f'{outprefix}/test25'
+        outprefix = '/work2/jcintineo/torcnn/tests/2011-19/'
+        outdir = f'{outprefix}/test01'
   
         # Inputs
         # 'Reflectivity', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear', 'RhoHV', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range', 'range_inv'
-        inputs.append(['Reflectivity', 'Velocity', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range'])
+        inputs.append(['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask', 'range'])
         #inputs.append(['range','range_inv']) # we need coords for coordconv
         scalar_vars = []
   
@@ -119,6 +141,12 @@ def tf_config():
            'outdir':outdir,
            'pool':'max',
            'label_smoothing': label_smoothing,
+           'n_tsamples':n_tsamples,
+           'n_vsamples':n_vsamples,
+           'train_years':train_years,
+           'val_years':val_years,
+           'pos_classes':pos_classes,
+           'neg_classes':neg_classes,
     }
   
 if __name__ == "__main__":

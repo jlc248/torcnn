@@ -239,7 +239,7 @@ def collect_and_write_tfrec(row,
     info['V_rot'] = row['V_rot']
     info['V_rotDistance'] = row['V_rotDistance']
     info['Elev'] = row['Elev']
-    info['tornado'] = row['tornado']
+    info['tornado'] = np.int32(row['tornado'])
     info['hail'] = row['hail']
     info['wind'] = row['wind']
     info['spout'] = row['spout']                                                    # landspout or waterspout
@@ -253,9 +253,9 @@ def collect_and_write_tfrec(row,
     try:
         info['pretor'] = row['pretor']
         if info['pretor']:
-            info['tornado'] = 1 # NB the TORP csvs say tornado=0 for each pretor sample
+            info['tornado'] = np.int32(1) # NB the TORP csvs say tornado=0 for each pretor sample
     except (KeyError, AttributeError) as err:
-        info['pretor'] = 0   
+        info['pretor'] = np.int32(0)   
  
     if row['spout']:
         label = 'spout'
@@ -379,8 +379,8 @@ if __name__ == "__main__":
     
     # Load torp dataset
     dataset = TORPDataset2(dirpath='/work2/jcintineo/TORP/',
-                          #years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018],
-                          years=[2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
+                          years=[2011],
+                          #years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
                           dataset_type=dataset_type
     )
     ds = dataset.load_dataframe()
