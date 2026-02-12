@@ -3,6 +3,15 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import matplotlib
 #matplotlib.use('Agg')
 import os
+
+# 0 = all logs (default)
+# 1 = filter out INFO
+# 2 = filter out INFO and WARNING
+# 3 = filter out INFO, WARNING, and ERROR
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# Specifically suppress the XLA slow operation alarms
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_slow_operation_alarm=false'
+
 #os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID";
 #os.environ["CUDA_VISIBLE_DEVICES"]="2";
 
@@ -14,12 +23,6 @@ import pickle
 import glob
 
 import tensorflow as tf
-tf.keras.backend.clear_session()
-#from tensorflow import keras
-#import tensorflow.keras.backend as K
-#from tensorflow.keras import mixed_precision
-#set the mixed precision policy
-#mixed_precision.set_global_policy('mixed_float16')
 
 import tf_models
 from tensorflow.keras.models import Model, save_model, load_model
@@ -304,14 +307,18 @@ def get_dataset(filenames, batch_size, training=False):
         # Repeat here to keep the file-stream infinite
         dataset = dataset.repeat()
 
+    # Reduce parallelism for validation to prevent the thread crash
+    # 16 is enough to keep your 40GB A100s fed during the small validation pass
+    num_threads = tf.data.AUTOTUNE if training else 16
+
     # Interleave reading from multiple shards
     ## By setting deterministic=False in the interleave, you allow the pipeline to return
     ## whichever shard's data is ready first. This prevents one slow I/O seek from
     ## blocking the entire pipeline.
     dataset = dataset.interleave(
-        lambda x: tf.data.TFRecordDataset(x, num_parallel_reads=tf.data.AUTOTUNE),
-        cycle_length=tf.data.AUTOTUNE,
-        num_parallel_calls=tf.data.AUTOTUNE,
+        lambda x: tf.data.TFRecordDataset(x, num_parallel_reads=num_threads),
+        cycle_length=num_threads,
+        num_parallel_calls=num_threads,
         deterministic=False
     )
 
