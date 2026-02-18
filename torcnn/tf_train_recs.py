@@ -10,7 +10,7 @@ import os
 # 3 = filter out INFO, WARNING, and ERROR
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 # Specifically suppress the XLA slow operation alarms
-os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_slow_operation_alarm=false'
+#os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_slow_operation_alarm=false'
 
 #os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID";
 #os.environ["CUDA_VISIBLE_DEVICES"]="2";
@@ -124,6 +124,14 @@ def normalize_channel(tensor, channel_name):
         # Scale physical -80 to 80 -> -1.0 to 1.0
         # Formula: (val - center) / half_range
         normalized = physical / max(abs(c_min), abs(c_max))
+    elif channel_name == 'AzShear' or channel_name == 'DivShear':
+        # For shear, we do a Power Transform (x^0.5)
+        # First, let's shift it to be purely positive for the transform
+        shifted = physical + abs(c_min) # Now 0.0 to 0.05
+        # Apply square root to "stretch" the low values
+        stretched = tf.sqrt(shifted)
+        # Final min-max scale to 0-1
+        normalized = stretched / tf.sqrt(c_max - c_min)
     else:
         # Scale physical min to max -> 0.0 to 1.0
         # Formula: (val - min) / (max - min)

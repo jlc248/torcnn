@@ -185,7 +185,7 @@ def cnn(config):
     conv_activation = config['conv_activation']
     learning_rate = config['learning_rate']
     batch_norm = config['batch_norm']
-    dor = config['dropout_rate']
+    dor = config['dropout_rate'] # a list
     l2_reg = config['l2_reg']
     scalar_vars = config['scalar_vars']
     padding = config['padding']
@@ -254,8 +254,8 @@ def cnn(config):
             conv = keras.layers.LeakyReLU()(conv)
         else:
             keras.layers.Activation(conv_activation)(conv)
-        if dor > 0:
-            conv = keras.layers.Dropout(dor)(conv)
+        if dor[ii] > 0:
+            conv = keras.layers.Dropout(dor[ii])(conv)
 
 
     # Dense output layer, equivalent to a logistic regression on the last layer

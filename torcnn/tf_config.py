@@ -42,18 +42,18 @@ def tf_config():
         train_list = []
         for yy in train_years:
             for cl in pos_classes + neg_classes:
-                train_list.append(f"{tfrec_dir}/{yy}/{yy}0610_{cl}*tfrec")
+                train_list.append(f"{tfrec_dir}/{yy}/{yy}????_{cl}*tfrec")
         val_list = []
         for yy in val_years:
             for cl in pos_classes + neg_classes:
-                val_list.append(f"{tfrec_dir}/{yy}/{yy}0610_{cl}*tfrec") 
+                val_list.append(f"{tfrec_dir}/{yy}/{yy}????_{cl}*tfrec") 
 
         outprefix = '/work2/jcintineo/torcnn/tests/2011-19/'
-        outdir = f'{outprefix}/test01'
+        outdir = f'{outprefix}/test07'
   
         # Inputs
         # 'Reflectivity', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear', 'RhoHV', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range', 'range_inv'
-        inputs.append(['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask', 'range'])
+        inputs.append(['Reflectivity', 'Velocity', 'RhoHV', 'range_folded_mask', 'out_of_range_mask', 'range'])
         #inputs.append(['range','range_inv']) # we need coords for coordconv
         scalar_vars = []
   
@@ -77,7 +77,7 @@ def tf_config():
         #architecture
         num_conv_filters = 128
         bias_init = None #np.array([-2.52378297]) #this np.log([pos/neg]) ; see https://www.tensorflow.org/tutorials/structured_data/imbalanced_data
-        dropout_rate = 0.2
+        dropout_rate = [0.4, 0.3, 0.1]
   
         num_encoding_blocks = 5
         num_conv_per_block = 2
@@ -86,8 +86,8 @@ def tf_config():
         assert(len(nfmaps_by_block) == num_encoding_blocks)
         num_decoding_blocks = 0
   
-        dense_layers = [256, 16] # Number of nuerons per dense layer
-  
+        dense_layers = [512, 256, 32] # Number of nuerons per dense layer
+        assert(len(dropout_rate) == len(dense_layers)) 
   
   
     channels = []
