@@ -6,7 +6,7 @@ import os, sys
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
-from torp_dataset import TORPDataset
+from torp_dataset import TORPDataset2
 import pickle
 import io
 
@@ -92,21 +92,27 @@ def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
     """
    
     # Remove any rows within 100km and 60min of a tornado report 
-    ds = mark_and_drop_rows(ds_orig)
+    ds = ds_orig #mark_and_drop_rows(ds_orig)
 
     # Check if the target column exists in the data
     if target_column not in ds.columns:
         print(f"Error: The target column '{target_column}' was not found in the data.")
         return
+    
+    # Include pretor info
+    mask = (ds['pretorMinutes'] >= 1) & (ds['pretorMinutes'] <= 30)
+    ds.loc[mask, target_column] = 1
 
     # hard-code torp predictors
-    predictor_names = pickle.load(open('torp_features.pkl','rb'))
+    predictor_names = pickle.load(open('torp_features_2026Dataset.pkl','rb'))
 
     # get only storms within 100km and 1hr here?
 
     # Parse out the data we want
-    train = ds[ds.year < 2024].copy()
-    val = ds[ds.year == 2024].copy()
+    train = ds[ds['Time'] < '20190101']
+    val = ds[ds['Time'].str.startswith('2019')]
+    #train = ds[ds.year < 2019].copy()
+    #val = ds[ds.year == 2019].copy()
 
     y_train = train[target_column]
     y_val = val[target_column]
@@ -167,13 +173,18 @@ def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
 
     # Calculate and print performance metrics
     val_accuracy = accuracy_score(y_val, y_pred_val)
-    val_precision, val_recall, _ = precision_recall_curve(y_val, y_pred_proba_val)
+    val_precision, val_recall, thresholds = precision_recall_curve(y_val, y_pred_proba_val)
+    csi = 1/(1/val_precision + 1/val_recall - 1)
+    max_csi = csi.max()
+    best_prob = thresholds[np.where(csi == max_csi)[0]] * 100
     val_aucpr = auc(val_recall, val_precision)
     val_f1 = f1_score(y_val, y_pred_val)
 
     print(f"Validation Accuracy: {val_accuracy:.4f}")
     print(f"Validation AUCPR: {val_aucpr:.4f}")
+    print(f"Max CSI: {max_csi:.4f}") # Best prob: {best_prob:.1f}") <--Error
     print(f"Validation F1-Score: {val_f1:.4f}")
+   
 
 
     # Create the output directory if it doesn't exist
@@ -212,9 +223,15 @@ def main():
     args = parser.parse_args()
 
     # Define the input file and target column
-    dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/',
-                          years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
-                          dataset_type='Storm_Reports',
+    #dataset = TORPDataset(dirpath='/raid/jcintineo/torcnn/torp_datasets/',
+    #                      years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019], # , 2020, 2021, 2022, 2023, 2024],
+    #                      dataset_type='Storm_Reports',
+    #)
+    #ds_orig = dataset.load_dataframe()
+
+    dataset = TORPDataset2(dirpath='/work2/jcintineo/TORP/',
+                           years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019],
+                           dataset_type='WarningReportPreTornadoInfo'
     )
     ds_orig = dataset.load_dataframe()
     
