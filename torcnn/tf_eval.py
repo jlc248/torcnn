@@ -320,10 +320,10 @@ if filelist:
     val_lists = [filelist]
 else:
     # Create the test dataset for running the permutation
-    year = "2013"
-    inroot = f"/raid/jcintineo/torcnn/tfrecs/{year}/"
+    year = "2019"
+    inroot = f"/work2/jcintineo/torcnn/tfrecs_shard/{year}/"
     # subdirs: nontor, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
-    subglob = "pretor_15"
+    subglobs = ["_tor_", "_wind_", "_hail_", "_nonsev_", "pretor_15", "pretor_30"]
     
     # leave these empty if you only want one run
     #month_subdirs = ['01-02','03','04','05','06','07','08','09','10','11-12']
@@ -346,84 +346,90 @@ else:
         for sub in hour_subdirs:
             val_lists.append(f"{inroot}/{year}*/{subglob}/*-{sub}*.tfrec")
     else:
-        val_lists = [f"{inroot}/{year}*/{subglob}/*tfrec"]  # this is your "one-run" case
+        val_lists = []
+        for subglob in subglobs:
+            val_lists.append(f"{inroot}/{year}*{subglob}*tfrec")  # this is your "one-run" case
 
 
-for ii, val_list in enumerate(val_lists):
-    if filelist:
-        test_filenames = val_list
-    else:
-        test_filenames = sorted(glob.glob(val_list))  # sort to ensure reproducibility
-    n_samples = len(test_filenames)
-    print("\nNumber of samples:", n_samples, "\n")
+#for ii, val_list in enumerate(val_lists):
 
-    try:
-        assert(n_samples > 0)
-    except AssertionError:
-        print(f'n_samples is {n_samples}')
-        sys.exit(1)
+if filelist:
+    test_filenames = val_list
+else:
+    test_filenames = []
+    for pattern in val_lists:
+        test_filenames.extend(glob.glob(pattern))
+   
+n_samples = len(test_filenames)
+print("\nNumber of samples:", n_samples, "\n")
 
-    # one-off to combine pretor with nontor from 2023
-    #test_filenames += glob.glob(f"/raid/jcintineo/torcnn/tfrecs/2023/2023*/nontor/*tfrec")
-    #n_samples = len(test_filenames)
-    #print("\nNumber of samples:", n_samples, "\n") 
+try:
+    assert(n_samples > 0)
+except AssertionError:
+    print(f'n_samples is {n_samples}')
+    sys.exit(1)
 
-    # Create the TFRecordDataset
-    test_ds = tf.data.TFRecordDataset(test_filenames, num_parallel_reads=AUTOTUNE)
+# one-off to combine pretor with nontor from 2023
+#test_filenames += glob.glob(f"/raid/jcintineo/torcnn/tfrecs/2023/2023*/nontor/*tfrec")
+#n_samples = len(test_filenames)
+#print("\nNumber of samples:", n_samples, "\n") 
 
-    # Already handles the remainder since drop_remainder=False by default
-    test_ds = (
-        test_ds.map(parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
-        .map(prepare_sample, num_parallel_calls=AUTOTUNE)
-        .batch(batchsize)  # Don't batch if making numpy arrays
-        .prefetch(AUTOTUNE)
+# Create the TFRecordDataset
+test_ds = tf.data.TFRecordDataset(test_filenames, num_parallel_reads=AUTOTUNE)
+
+# Already handles the remainder since drop_remainder=False by default
+test_ds = (
+    test_ds.map(parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
+    .map(prepare_sample, num_parallel_calls=AUTOTUNE)
+    .batch(batchsize)  # Don't batch if making numpy arrays
+    .prefetch(AUTOTUNE)
+)
+
+# Disable AutoShard.
+options = tf.data.Options()
+options.experimental_distribute.auto_shard_policy = (
+    tf.data.experimental.AutoShardPolicy.OFF
+)
+test_ds = test_ds.with_options(options)
+
+if filelist:
+    all_preds = np.array([])
+    all_labels = np.array([])
+    # for quick_looks (or used for debugging)
+    for inputs,labels in test_ds:
+        preds = conv_model.predict(inputs)
+        all_preds = np.concatenate((all_preds, np.squeeze(preds)))
+        all_labels =  np.concatenate((all_labels, np.squeeze(labels)))
+    os.makedirs(outdir, exist_ok=True)
+    np.save(f'{outdir}/predictions.npy', all_preds) 
+    np.save(f'{outdir}/labels.npy', all_labels)
+    print(len(all_preds), len(all_labels)) 
+else:
+    # Perform eval
+    eval_results = conv_model.evaluate(test_ds)
+
+    cter = 0
+    dict_results = collections.OrderedDict(
+        {
+            "n_gpu": ngpu,
+            "batch_size": batchsize,
+            "n_samples": n_samples,
+            "val_lists": val_lists,
+        }
     )
 
-    # Disable AutoShard.
-    options = tf.data.Options()
-    options.experimental_distribute.auto_shard_policy = (
-        tf.data.experimental.AutoShardPolicy.OFF
-    )
-    test_ds = test_ds.with_options(options)
+    for key in custom_objs:
+        dict_results[key] = np.round(eval_results[cter], 5)
+        cter += 1
 
-    if filelist:
-        all_preds = np.array([])
-        all_labels = np.array([])
-        # for quick_looks (or used for debugging)
-        for inputs,labels in test_ds:
-            preds = conv_model.predict(inputs)
-            all_preds = np.concatenate((all_preds, np.squeeze(preds)))
-            all_labels =  np.concatenate((all_labels, np.squeeze(labels)))
-        os.makedirs(outdir, exist_ok=True)
-        np.save(f'{outdir}/predictions.npy', all_preds) 
-        np.save(f'{outdir}/labels.npy', all_labels)
-        print(len(all_preds), len(all_labels)) 
+    # Append outsubdir, if necessary
+    if month_subdirs:
+        final_outdir = f"{outdir}/month{month_subdirs[ii]}"
+    elif hour_subdirs:
+        final_outdir = f"{outdir}/hour{hour_subdirs[ii]}"
     else:
-        # Perform eval
-        eval_results = conv_model.evaluate(test_ds)
+        final_outdir = outdir
 
-        cter = 0
-        dict_results = collections.OrderedDict(
-            {
-                "n_gpu": ngpu,
-                "batch_size": batchsize,
-                "n_samples": n_samples,
-                "val_lists": val_lists,
-            }
-        )
-
-        for key in custom_objs:
-            dict_results[key] = np.round(eval_results[cter], 5)
-            cter += 1
-
-        # Append outsubdir, if necessary
-        if month_subdirs:
-            final_outdir = f"{outdir}/month{month_subdirs[ii]}"
-        elif hour_subdirs:
-            final_outdir = f"{outdir}/hour{hour_subdirs[ii]}"
-        else:
-            final_outdir = outdir
-
-        os.makedirs(final_outdir, exist_ok=True)
-        pickle.dump(dict_results, open(f"{final_outdir}/eval_results.pkl", "wb"))
-        print(f"Saved {final_outdir}/eval_results.pkl")
+    os.makedirs(final_outdir, exist_ok=True)
+    pickle.dump(dict_results, open(f"{final_outdir}/eval_results.pkl", "wb"))
+    print(f"Saved {final_outdir}/eval_results.pkl")
