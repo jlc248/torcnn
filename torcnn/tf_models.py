@@ -164,7 +164,7 @@ def conv_coord_block(x, c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rat
         x = keras.layers.Dropout(rate=drop_rate)(x)
     return x,c
 #---------------------------------------------------------------------------------------------------------------------------------
-def conv_block(x, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, batch_norm=False, activation='relu', padding="same"):
+def conv_block(x, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, batch_norm=False, activation='relu', padding="same", spatial_dropout=0):
 
     for _ in range(n_convs):
         x = keras.layers.Conv2D(filters=filters,
@@ -174,6 +174,8 @@ def conv_block(x, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, ba
         if batch_norm:
             x = keras.layers.BatchNormalization()(x)
         x = keras.layers.Activation(activation)(x)
+    if spatial_dropout > 0:
+        x = keras.layers.SpatialDropout2D(spatial_dropout)(x) # Forces cross-channel learning
     x = keras.layers.MaxPool2D(pool_size =2, strides =2, padding ='same')(x)
         
     return x
@@ -194,6 +196,8 @@ def cnn(config):
     nfmaps_by_block = config['nfmaps_by_block']
     coord_conv = config['coord_conv']
     label_smoothing = config['label_smoothing']
+    regs = config['regs']
+    spatial_dropout = config['spatial_dropout']
 
     radar = conv = keras.Input(shape=input_tuples[0], name='radar')
     inputs = [radar]
@@ -233,11 +237,13 @@ def cnn(config):
                               batch_norm=batch_norm,
                               activation=conv_activation,
                               padding=padding,
+                              spatial_dropout=spatial_dropout[ii]
             )  
 
 
     # Flatten
     conv = keras.layers.Flatten()(conv)
+    #conv = keras.layers.GlobalAveragePooling2D()(conv)
 
     #concatenate scalars
     if scalar_vars:
@@ -247,11 +253,13 @@ def cnn(config):
 
     # Dense layers
     for ii,nneurons in enumerate(config['dense_layers']):
-        conv = keras.layers.Dense(nneurons)(conv)
+        if regs[ii] > 0:
+            reg = keras.regularizers.l2(regs[ii])
+        else:
+            reg = None
+        conv = keras.layers.Dense(nneurons, kernel_regularizer=reg)(conv)
         if batch_norm:
             conv = keras.layers.BatchNormalization()(conv)
-        if conv_activation == 'leaky_relu':
-            conv = keras.layers.LeakyReLU()(conv)
         else:
             keras.layers.Activation(conv_activation)(conv)
         if dor[ii] > 0:
