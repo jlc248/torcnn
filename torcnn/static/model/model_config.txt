@@ -6,7 +6,7 @@ class_weights: False
 batch_norm: True
 bias_init: None
 scalar_vars: []
-channels: ['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask', 'range']
+channels: ['Reflectivity', 'Velocity', 'RhoHV', 'range_folded_mask', 'out_of_range_mask', 'range']
 l2_reg: 0.0
 dropout_rate: 0.2
 batchsize: 256
@@ -25,18 +25,22 @@ rlr_factor: 0.1
 rlr_patience: 1
 rlr_cooldown: 2
 cnn: cnn
-input_tuples: [(128, 256, 5)]
-inputs: [['Reflectivity', 'Velocity', 'range_folded_mask', 'out_of_range_mask', 'range']]
-train_list: ['/raid/jcintineo/torcnn/tfrecs_100km1hr/201[1-9]/2*/[n,t]*/*tfrec', '/raid/jcintineo/torcnn/tfrecs_100km1hr/202[0-2]/2*/[n,t]*/*tfrec']
-val_list: ['/raid/jcintineo/torcnn/tfrecs_100km1hr/2023/2*/[n,t]*/*.tfrec']
+input_tuples: [(128, 256, 6)]
+inputs: [['Reflectivity', 'Velocity', 'RhoHV', 'range_folded_mask', 'out_of_range_mask', 'range']]
+train_list: ['/work2/jcintineo/torcnn/tfrecs_shard/2011/2011????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2011/2011????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2011/2011????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2011/2011????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2011/2011????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2011/2011????_nonsev*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2012/2012????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2012/2012????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2012/2012????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2012/2012????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2012/2012????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2012/2012????_nonsev*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2013/2013????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2013/2013????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2013/2013????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2013/2013????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2013/2013????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2013/2013????_nonsev*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2014/2014????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2014/2014????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2014/2014????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2014/2014????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2014/2014????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2014/2014????_nonsev*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2015/2015????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2015/2015????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2015/2015????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2015/2015????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2015/2015????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2015/2015????_nonsev*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2016/2016????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2016/2016????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2016/2016????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2016/2016????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2016/2016????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2016/2016????_nonsev*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2017/2017????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2017/2017????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2017/2017????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2017/2017????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2017/2017????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2017/2017????_nonsev*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2018/2018????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2018/2018????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2018/2018????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2018/2018????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2018/2018????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2018/2018????_nonsev*tfrec']
+val_list: ['/work2/jcintineo/torcnn/tfrecs_shard/2019/2019????_tor*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2019/2019????_pretor_15*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2019/2019????_pretor_30*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2019/2019????_hail*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2019/2019????_wind*tfrec', '/work2/jcintineo/torcnn/tfrecs_shard/2019/2019????_nonsev*tfrec']
 targets: ['tornado']
 byte_scaling_vals: {'Reflectivity': {'vmin': 5, 'vmax': 70}, 'Velocity': {'vmin': -100, 'vmax': 100}, 'AliasedVelocity': {'vmin': -100, 'vmax': 100}, 'AzShear': {'vmin': -0.01, 'vmax': 0.04}, 'DivShear': {'vmin': -0.01, 'vmax': 0.04}, 'PhiDP': {'vmin': 0, 'vmax': 360}, 'RhoHV': {'vmin': 0, 'vmax': 1}, 'SpectrumWidth': {'vmin': 0, 'vmax': 70}, 'Zdr': {'vmin': -4, 'vmax': 6}, 'azimuth': {'vmin': 0, 'vmax': 360}, 'range': {'vmin': 0, 'vmax': 460}}
 binarize: -1
 ngpu: 1
 loss_fcn: binary_crossentropy
 optimizer: AdamW
-outdir: /raid/jcintineo/torcnn/tests/2011-23//test23
+outdir: /work2/jcintineo/torcnn/tests/2011-19//test05
 pool: max
 label_smoothing: 0.1
-Number of training samples: 362364
-Number of validation samples: 46112
+n_tsamples: 3396557
+n_vsamples: 830169
+train_years: [2011 2012 2013 2014 2015 2016 2017 2018]
+val_years: [2019]
+pos_classes: ['tor', 'pretor_15', 'pretor_30']
+neg_classes: ['hail', 'wind', 'nonsev']
