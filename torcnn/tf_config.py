@@ -49,13 +49,13 @@ def tf_config():
                 val_list.append(f"{tfrec_dir}/{yy}/{yy}????_{cl}*tfrec") 
 
         outprefix = '/work2/jcintineo/torcnn/tests/2011-19/'
-        outdir = f'{outprefix}/test07'
+        outdir = f'{outprefix}/test19'
   
         # Inputs
         # 'Reflectivity', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear', 'RhoHV', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range', 'range_inv'
-        inputs.append(['Reflectivity', 'Velocity', 'RhoHV', 'range_folded_mask', 'out_of_range_mask', 'range'])
+        inputs.append(['Reflectivity', 'Velocity', 'RhoHV', 'range_folded_mask', 'out_of_range_mask'])
         #inputs.append(['range','range_inv']) # we need coords for coordconv
-        scalar_vars = []
+        scalar_vars = ['RangeKm']
   
         ps = (128,256)
         input_tuples = [(ps[0], ps[1], len(inputs[0]))]
@@ -63,12 +63,16 @@ def tf_config():
             input_tuples.append( (ps[0], ps[1], len(inputs[1])) )
      
         # Use coordinate convolution?
-        coord_conv = False 
+        coord_conv = False
  
         label_smoothing = 0.1
  
-        loss_fcn = 'binary_crossentropy' #tversky_coeff binary_crossentropy csi iou
+        loss_fcn = 'binary_crossentropy' # binary_focal_crossentropy, binary_crossentropy, csi, iou
         learning_rate = 0.01
+        lr_schedule = None #{'type':'cosine', # dict or None
+                       #'warmup_epochs':3,
+                       #'alpha':0.01
+        #}
         sample_weights = {} #{'dbz_thresh':30, 'clear_wt':0.25, 'precip_wt':1, 'pos_class_wt':10} #leave empty if you don't want sample weights
         class_weights = False
         #augmentations -- options: 'random_rotation:1', 'random_noise':0.1
@@ -77,17 +81,20 @@ def tf_config():
         #architecture
         num_conv_filters = 128
         bias_init = None #np.array([-2.52378297]) #this np.log([pos/neg]) ; see https://www.tensorflow.org/tutorials/structured_data/imbalanced_data
-        dropout_rate = [0.4, 0.3, 0.1]
+        dropout_rate = [0.2, 0.0] # for dense layers
   
         num_encoding_blocks = 5
         num_conv_per_block = 2
-        nfmaps_by_block = [num_conv_filters, int(num_conv_filters), int(num_conv_filters),
+        nfmaps_by_block = [int(num_conv_filters), int(num_conv_filters), int(num_conv_filters),
                            int(num_conv_filters), int(num_conv_filters)]
         assert(len(nfmaps_by_block) == num_encoding_blocks)
+        spatial_dropout = [0, 0, 0, 0, 0]
+        assert(len(spatial_dropout) == num_encoding_blocks)
         num_decoding_blocks = 0
   
-        dense_layers = [512, 256, 32] # Number of nuerons per dense layer
-        assert(len(dropout_rate) == len(dense_layers)) 
+        dense_layers = [256, 16] # Number of nuerons per dense layer
+        regs = [0, 0]
+        assert(len(dropout_rate) == len(dense_layers) == len(regs)) 
   
   
     channels = []
@@ -111,21 +118,26 @@ def tf_config():
            'channels':channels,
            'l2_reg':0.0,
            'dropout_rate':dropout_rate,
+           'spatial_dropout':spatial_dropout,
            'batchsize':batchsize,
            'num_encoding_blocks':num_encoding_blocks,
            'num_decoding_blocks':num_decoding_blocks,
            'num_conv_per_block':num_conv_per_block,
            'nfmaps_by_block':nfmaps_by_block,
            'dense_layers':dense_layers,
+           'regs':regs,
            'filter_width':3,
            'conv_activation':'leaky_relu',
            'padding':'same',
            'learning_rate':learning_rate,
+           'lr_schedule':lr_schedule,
            'nepoch':100,
-           'es_patience':3,
-           'rlr_factor':0.1,
-           'rlr_patience':1,
-           'rlr_cooldown':2,
+           'es_patience':6,
+           'monitor':'val_auprc_index0',
+           'rlr_factor':0.1, #0.2
+           'rlr_patience':2, #2
+           'rlr_min_delta':0.001, #0.001
+           'rlr_cooldown':1, #1
            'cnn':cnn,
            'input_tuples':input_tuples,
            'inputs':inputs,
@@ -141,6 +153,7 @@ def tf_config():
            'outdir':outdir,
            'pool':'max',
            'label_smoothing': label_smoothing,
+           'steps_per_epoch': n_tsamples // batchsize,
            'n_tsamples':n_tsamples,
            'n_vsamples':n_vsamples,
            'train_years':train_years,

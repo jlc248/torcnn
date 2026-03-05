@@ -121,7 +121,8 @@ def get_bsinfo():
 
     # Other vars
     bsinfo['azimuth'] = {'vmin':0, 'vmax':360}              # degrees
-    bsinfo['range'] = {'vmin':0, 'vmax': 460}  # km 
+    bsinfo['range'] = {'vmin':0, 'vmax': 460}               # km 
+    bsinfo['RangeKm'] = {'vmin':0, 'vmax': 460}             # km
 
     return bsinfo
 

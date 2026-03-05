@@ -204,7 +204,11 @@ def parse_and_prepare(example_proto):
     if SCALAR_VARS:
         scalar_list = []
         for var in SCALAR_VARS:
-            val = tf_bytescale(features[var], BSINFO[var]['vmin'], BSINFO[var]['vmax'])
+            #val = tf_bytescale(features[var], BSINFO[var]['vmin'], BSINFO[var]['vmax'])
+            c_min = BSINFO[var]['vmin']
+            c_max = BSINFO[var]['vmax']
+            # Normalize 0 to 1
+            val = (features[var] - c_min) / (c_max - c_min) 
             scalar_list.append(val)
         processed_inputs['scalars'] = tf.stack(scalar_list)
 
@@ -316,8 +320,8 @@ def get_dataset(filenames, batch_size, training=False):
         dataset = dataset.repeat()
 
     # Reduce parallelism for validation to prevent the thread crash
-    # 16 is enough to keep your 40GB A100s fed during the small validation pass
-    num_threads = tf.data.AUTOTUNE if training else 16
+    # 4 is enough to keep your 40GB A100s fed during the small validation pass
+    num_threads = tf.data.AUTOTUNE if training else 4
 
     # Interleave reading from multiple shards
     ## By setting deterministic=False in the interleave, you allow the pipeline to return
@@ -339,7 +343,7 @@ def get_dataset(filenames, batch_size, training=False):
     dataset = dataset.map(parse_and_prepare, num_parallel_calls=tf.data.AUTOTUNE)
    
     dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    dataset = dataset.prefetch(1 if not training else tf.data.AUTOTUNE)
     
     # Setting AutoShardPolicy
     ## Use FILE if number of shards >> number of GPUs.
@@ -349,6 +353,19 @@ def get_dataset(filenames, batch_size, training=False):
     dataset = dataset.with_options(options)
 
     return dataset
+
+#################################################################################################################################
+class WarmupExponentialDecay(tf.keras.callbacks.Callback):
+    def __init__(self, target_lr, warmup_epochs):
+        self.target_lr = target_lr
+        self.warmup_epochs = warmup_epochs
+
+    def on_epoch_begin(self, epoch, logs=None):
+        if epoch < self.warmup_epochs:
+            lr = (self.target_lr / self.warmup_epochs) * (epoch + 1)
+            self.model.optimizer.learning_rate.assign(lr)
+            print(f"\nWarmup learning rate: {lr:.6f}")
+
 #################################################################################################################################
 #################################################################################################################################
 
@@ -362,10 +379,7 @@ for pattern in config['train_list']:
     train_filenames.extend(glob.glob(pattern))
 train_ds = get_dataset(train_filenames, BATCHSIZE, training=True)
 
-n_tsamples = config['n_tsamples']
-steps_per_epoch = n_tsamples // BATCHSIZE
-print('steps_per_epoch:', steps_per_epoch)
-
+print('steps_per_epoch:', config['steps_per_epoch'])
 
 # Augment data (optional)
 #if 'random_rotation' in config['img_aug']:
@@ -417,17 +431,23 @@ pickle.dump(config,open(os.path.join(outdir,'model_config.pkl'),'wb'))
 #===================================================================================================================#
 
 csvlogger = CSVLogger(f"{outdir}/log.csv", append=True)
-early_stopping = EarlyStopping(monitor='val_loss', patience=config['es_patience'], min_delta=0.0001)
-mcp_save = ModelCheckpoint(os.path.join(outdir,'model-{epoch:02d}-{val_loss:03f}.keras'),save_best_only=True, monitor='val_loss', mode='min')
-reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', cooldown=config['rlr_cooldown'], verbose=1,# min_delta=0.00001,
-                 factor=config['rlr_factor'], patience=config['rlr_patience'], mode='min')
+monitor = config['monitor']
+mode = 'min' if monitor == 'val_loss' else 'max'
+early_stopping = EarlyStopping(monitor=monitor, patience=config['es_patience'], mode=mode, min_delta=0.001)
+mcp_save = ModelCheckpoint(os.path.join(outdir,'model-{epoch:02d}-{'+monitor+':04f}.keras'),save_best_only=True, monitor=monitor, mode=mode)
+callbacks = [early_stopping, mcp_save]
+if config['rlr_factor'] > 0:
+    reduce_lr = ReduceLROnPlateau(monitor=monitor, cooldown=config['rlr_cooldown'], verbose=1, min_delta=config['rlr_min_delta'],
+                     factor=config['rlr_factor'], patience=config['rlr_patience'], min_lr=1e-5, mode=mode)
+    callbacks.append(reduce_lr)
+callbacks.append(csvlogger) # should go at the end, just to be safe
+
+#warmup_callback = WarmupExponentialDecay(target_lr=config['learning_rate'], warmup_epochs=3)
+#callbacks.append(warmup_callback)
 #tboard = TensorBoard(log_dir='/home/jcintineo/pscnn/pscnn/tb_logs/',
 #                     histogram_freq=1,
 #                     write_images=True,
 #                     profile_batch=(200,300)) #profile from batch X to batch Y
-#lr_finder = LRFinder(min_lr=1e-7, max_lr=1e-1)
-#callbacks = [lr_finder]
-callbacks = [early_stopping, mcp_save, reduce_lr_loss, csvlogger] #, tboard]
 
 
 if NGPU > 1:
@@ -467,7 +487,7 @@ logging.info('Fitting model...')
 history = conv_model.fit(
           x=train_ds,
           verbose=1,
-          steps_per_epoch=steps_per_epoch,
+          steps_per_epoch=config['steps_per_epoch'],
           epochs=config['nepoch'],
           validation_data=val_ds,
           initial_epoch=initial_epoch,

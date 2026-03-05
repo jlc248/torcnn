@@ -14,7 +14,7 @@ def get_metrics(num_targets=1):
 
   metrics = []
 
-  levs = np.arange(0.05,0.51,0.05)
+  levs = np.arange(0.05,0.91,0.05)
   for ii in range(num_targets):
 
       metrics.append(tf_metrics.AUC(name=f'auprc_index{ii}', curve='PR', index=ii))
@@ -281,6 +281,13 @@ def cnn(config):
         loss_fcn = losses.iou(use_as_loss_function=True, use_soft_discretization=False, hard_discretization_threshold=None)
     elif config['loss_fcn'] == 'binary_crossentropy':
         loss_fcn = keras.losses.BinaryCrossentropy(label_smoothing=label_smoothing)
+    elif config['loss_fcn'] == 'binary_focal_crossentropy':
+        # For gamma=2.0, if the model predicts 0.9, the loss for that sample is reduced by a factor of 100 (0.1)^2
+        # If the model is unsure (p=0.5), the discount is much smaller
+        # Result: the model is forced to fucs its gradient updates on hard negatives and hard positives
+        # Alpha is the "class balance" weight
+        # As gamma increases, the optimal alpha usually decreases. 
+        loss_fcn = keras.losses.BinaryFocalCrossentropy(gamma=2.0, alpha=0.25, label_smoothing=label_smoothing)
 
     METRICS = get_metrics()
 
@@ -289,7 +296,22 @@ def cnn(config):
         opt = tfa.optimizers.AdaBelief
     else:
         opt = getattr(keras.optimizers,config['optimizer'])
-    conv_model.compile(optimizer = opt(learning_rate = learning_rate), loss = loss_fcn, metrics = METRICS)
+
+    if config['lr_schedule'] != None:
+        if config['lr_schedule']['type'] == 'cosine':
+            lr_schedule = tf.keras.optimizers.schedules.CosineDecay(
+                initial_learning_rate=1e-6, 
+                decay_steps=config['steps_per_epoch'] * config['nepoch'],
+                warmup_target=learning_rate,
+                warmup_steps=config['steps_per_epoch'] * config['lr_schedule']['warmup_epochs'],
+                alpha=config['lr_schedule']['alpha'] # Minimum learning rate value for decay as a fraction of initial_learning_rate 
+            )
+        opt = opt(learning_rate=lr_schedule, weight_decay=1e-4)
+    else:
+        # usually paired with ReduceLROnPlateau callback
+        opt = opt(learning_rate=learning_rate, weight_decay=1e-4)
+
+    conv_model.compile(optimizer = opt, loss = loss_fcn, metrics = METRICS)
     print(conv_model.summary())
 
     return conv_model
