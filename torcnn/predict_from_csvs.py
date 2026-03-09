@@ -139,9 +139,14 @@ def create_tensor(row,
                 # Normalize in physical units
                 rmin = bsinfo[varname]['vmin']
                 rmax = bsinfo[varname]['vmax']
-                rad_sector_scaled = (rad_sector - rmin) / (rmax - rmin)
-                rad_sector_scaled[rad_sector_scaled < 0] = 0
-                rad_sector_scaled[rad_sector_scaled > 1] = 1
+                if varname == 'Velocity':
+                    # Scale physical -100 to 100 -> -1.0 to 1.0
+                    # Formula: (val - center) / half_range
+                    normalized = rad_sector / max(abs(rmin), abs(rmax))
+                else: 
+                    rad_sector_scaled = (rad_sector - rmin) / (rmax - rmin)
+                    rad_sector_scaled[rad_sector_scaled < 0] = 0
+                    rad_sector_scaled[rad_sector_scaled > 1] = 1
 
                 # Encode range-folded region
                 if varname == 'Velocity':
