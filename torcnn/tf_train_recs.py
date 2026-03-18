@@ -166,7 +166,6 @@ def parse_and_prepare(example_proto):
     # Process Inputs
     processed_inputs = {}
 
-    # Pre-parse tensors to avoid repeated work
     parsed_tensors = {}
     for inp in INPUTS:
         for chan in inp:

@@ -254,5 +254,9 @@ for row in ds.itertuples():
 
 print(all_preds.shape)
 ds['torcnn_probability'] = all_preds
-ds.to_csv(f'{outdir}/df_combined.csv')
+
+ds = ds.sort_values(by=['id', 'current_time_of_detection'])
+
+
+ds.to_csv(f'{outdir}/df_combined.csv', index=False)
 logging.info(f'Saved {outdir}/df_combined.csv')

@@ -123,6 +123,7 @@ def get_bsinfo():
     bsinfo['azimuth'] = {'vmin':0, 'vmax':360}              # degrees
     bsinfo['range'] = {'vmin':0, 'vmax': 460}               # km 
     bsinfo['RangeKm'] = {'vmin':0, 'vmax': 460}             # km
+    bsinfo['V_rot'] = {'vmin':0, 'vmax':100}                # m/s
 
     return bsinfo
 

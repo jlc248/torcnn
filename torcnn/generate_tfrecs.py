@@ -246,10 +246,9 @@ def collect_and_write_tfrec(row,
     info['maghail'] = row['maghail']
     info['magwind'] = row['magwind']
     info['magtornado'] = -1 if row['magtornado'] == 'U' else float(row['magtornado'])
-    info['severeWarned'] = row['severeWarned']
-    info['tornadoWarned'] = row['tornadoWarned']
-    info['marineWarned'] = row['marineWarned']    
-    info['TrackDist'] = row['TrackDist']                                            # Track distance...in km?
+    #info['severeWarned'] = row['severeWarned']
+    #info['tornadoWarned'] = row['tornadoWarned']
+    #info['marineWarned'] = row['marineWarned']    
     try:
         info['pretor'] = row['pretor']
         if info['pretor']:

@@ -49,7 +49,11 @@ def find_new_files(listened_file, processed_list):
    
     # new_files[:] creates a new list for iteration, leaving the original free for modification 
     for new_file in new_files[:]: 
-        dt = datetime.strptime(os.path.basename(new_file)[0:15], '%Y%m%d-%H%M%S')
+        try:
+            dt = datetime.strptime(os.path.basename(new_file)[0:15], '%Y%m%d-%H%M%S')
+        except ValueError:
+            logging.warning(f'Bad format: {os.path.basename(new_file)}. Skipping.')
+            continue
         if dt < expired or new_file in processed_list:
             # If too old or already-processed then don't include it
             new_files.remove(new_file)
@@ -63,7 +67,7 @@ def find_new_files(listened_file, processed_list):
 
 #----------------------------------------------------------------------------------
 
-def make_prediction_tensors(config, new_files, processed_list):
+def make_prediction_tensors(config, new_files, processed_list, dataroot):
 
     """
     Using the list of new_files, get the actual NEXRAD data and create a dict 
@@ -73,6 +77,7 @@ def make_prediction_tensors(config, new_files, processed_list):
     - config (dict): model config dictionary, so we know which channels to get
     - new_files (list): A list of full paths to new TORP detects (per-radar per-time)
     - processed_list (list): The list to add each new_file to if it was successfully processed.
+    - dataroot (str): Root path where the NEXRAD L2 netcdfs live.
 
     Returns:
     - samples (dict): Contains the tensors with shape = (ndetects, ny, nx, nchannels)
@@ -95,6 +100,7 @@ def make_prediction_tensors(config, new_files, processed_list):
         df = pd.read_csv(torpfile)
         lats = df.lat
         lons = df.lon
+        radar = df.iloc[0].radar
         if np.isnan(lats).any() or np.isnan(lons).any():
             logger.warning(f'Missing coords in {torpfile}. Skipping.')
             continue
@@ -114,9 +120,6 @@ def make_prediction_tensors(config, new_files, processed_list):
         vel_dt = datetime.strptime(os.path.basename(torpfile)[0:15], '%Y%m%d-%H%M%S')
         samples[torpfile]['vel_dt'] = vel_dt
 
-        # Root dir for data
-        rootdir = os.path.dirname(torpfile).split('TORPcsv')[0]
-
         for chIdx,chan in enumerate(channels):
 
             if chan in ['range', 'range_inv', 'range_folded_mask', 'out_of_range_mask']:
@@ -125,8 +128,11 @@ def make_prediction_tensors(config, new_files, processed_list):
             else:
                 # Normal radar moments
 
+                cmin = bsinfo[chan]['vmin']
+                cmax = bsinfo[chan]['vmax']
+
                 # Find the closest file to vel_dt
-                all_files = glob.glob(f"{rootdir}/{chan}/{tilt}/*netcdf")
+                all_files = glob.glob(f"{dataroot}/{radar}/{chan}/{tilt}/*netcdf")
                 dts = [datetime.strptime(os.path.basename(ff), '%Y%m%d-%H%M%S.netcdf') for ff in all_files]
                 closest_dt = min(dts, key=lambda dt: abs(vel_dt - dt))
                 if abs(vel_dt - closest_dt).seconds > 180:
@@ -157,17 +163,28 @@ def make_prediction_tensors(config, new_files, processed_list):
                         samples[torpfile]['is_valid'][ii] = False
                         continue
 
+
                     if chIdx == 0: 
                         # Get range and range_inv on the first channel iteration. Also, make out_of_range_mask.
                         ## 'range' is 1D, but we need it to be 2D. Expand to number of azimuths
                         if 'range' in channels or 'out_of_range_mask' in channels:
                             range_data = np.repeat(np.expand_dims(r_sector, axis=0), hs[0]*2, axis=0)
-                            range_data = utils.bytescale(range_data,
-                                                         bsinfo['range']['vmin'],
-                                                         bsinfo['range']['vmax'],
-                                                         min_byte_val=1, # we also invert range, so keep it > 0
-                                                         max_byte_val=255
-                            ).astype(np.float32)
+
+                            rmin = bsinfo['range']['vmin']
+                            rmax = bsinfo['range']['vmax']
+
+                            # Depending on the model, you will either normalize to bytes or  normalize to 0 --> 1
+                           # range_data = utils.bytescale(range_data,
+                           #                              rmin, 
+                           #                              rmax, 
+                           #                              min_byte_val=1, # we also invert range, so keep it > 0
+                           #                              max_byte_val=255
+                           # ).astype(np.float32)
+
+                            # Normalize in physical units
+                            range_data = (range_data - rmin) / (rmax - rmin)
+                            range_data[range_data < 0] = 0
+                            range_data[range_data > 1] = 1
 
                             # Add data to tensor
                             if 'range' in channels:
@@ -187,14 +204,31 @@ def make_prediction_tensors(config, new_files, processed_list):
                         # Add data to tensor
                         tensor[ii, ..., chan_slice] = (rad_sector == range_folded_value).astype(np.float32)
 
+                    # Depending on the model, you will either normalize to bytes or
+                    # normalize to 0 --> 1 or -1 --> +1
 
-                    # Bytescale the moment data data
-                    rad_sector_scaled = utils.bytescale(rad_sector,
-                                                        bsinfo[chan]['vmin'],
-                                                        bsinfo[chan]['vmax'],
-                                                        min_byte_val=0,
-                                                        max_byte_val=255
-                    ) 
+                    # Normalize the moment data data
+                    ## Bytescale
+                    #rad_sector_scaled = utils.bytescale(rad_sector,
+                    #                                    cmin, 
+                    #                                    cmax, 
+                    #                                    min_byte_val=0,
+                    #                                    max_byte_val=255
+                    #) 
+                
+                    ## Normalize in physical units
+                    if chan == 'Velocity':
+                        # Scale physical -100 to 100 -> -1.0 to 1.0
+                        # Formula: (val - center) / half_range
+                        rad_sector_scaled = rad_sector / max(abs(cmin), abs(cmax))
+                        rad_sector_scaled[rad_sector_scaled < -1] = -1
+                        rad_sector_scaled[rad_sector_scaled > 1] = 1
+                    else:
+                        # Scale physical min to max -> 0.0 to 1.0
+                        # Formula: (val - min) / (max - min)
+                        rad_sector_scaled = (rad_sector - cmin) / (cmax - cmin)
+                        rad_sector_scaled[rad_sector_scaled < 0] = 0
+                        rad_sector_scaled[rad_sector_scaled > 1] = 1
 
                     # Add moment data to tensor
                     tensor[ii, ..., chIdx] = rad_sector_scaled
@@ -288,6 +322,7 @@ def write_outputs(probs, samples, end_index, outpatt):
 
 def run_model(listened_file,
               model_file,
+              dataroot,
               outpatt,
 ):
 
@@ -309,7 +344,7 @@ def run_model(listened_file,
         
             # Create the prediction tensors with NEXRAD WDSS2 netcdf data.
             # samples is a dict with each new_file as a key, pointing to the tensor at lats/lons
-            samples = make_prediction_tensors(config, new_files, processed_list)
+            samples = make_prediction_tensors(config, new_files, processed_list, dataroot)
             
             if len(samples):
                 # Make predictions
@@ -329,13 +364,17 @@ def run_model(listened_file,
 
 if __name__ == "__main__":
 
+    if 'TORCNN_DATA' not in os.environ:
+        print('TORCNN_DATA env variable must be set.')
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(description="Uses TORP detects from output csvs and WDSS2-processed " + \
                                                  "radar data (netcdfs) to predict prob(tor) from CNN. " + \
                                                  "Velocity data is dealiased with WDSS2+RAP data."
     )
     parser.add_argument('listened_file',
                         help="This file generates a new line when a TORP csv is created (per-radar per-time). " + \
-                             "E.g., /raid/sas8tb/jcintineo/torcnn_output/logs/MAIN-TORPLIST-A1.log", 
+                             "E.g., /sas8tb/jcintineo/torcnn_output/logs/MAIN-TORPLIST-A1.log", 
                         type=str
     )
     parser.add_argument('-m',
@@ -344,10 +383,16 @@ if __name__ == "__main__":
                         default="static/model/fit_conv_model.keras",
                         type=str
     )
+    parser.add_argument('-d',
+                        '--dataroot',
+                        help="root path to NEXRAD L2 data. Default= /ssd1/localdata_MRMS/realtime/radar/.",
+                        default='/ssd1/localdata_MRMS/realtime/radar/',
+                        type=str
+    )
     parser.add_argument('-o',
                         '--outpatt',
-                        help="Output directory pattern. Default = /raid/sas8tb/jcintineo/torcnn_output/products/{radar}/%%Y/%%Y%%m%%d/",
-                        default="/raid/sas8tb/jcintineo/torcnn_output/products/{radar}/%Y/%Y%m%d/",
+                        help="Output directory pattern. Default = ${TORCNN_DATA}/products/{radar}/%%Y/%%Y%%m%%d/",
+                        default=os.environ['TORCNN_DATA'] + "/products/{radar}/%Y/%Y%m%d/",
                         type=str
     )
     
@@ -355,5 +400,6 @@ if __name__ == "__main__":
 
     run_model(args.listened_file,
               args.model,
+              args.dataroot,
               args.outpatt
     )

@@ -306,10 +306,10 @@ def cnn(config):
                 warmup_steps=config['steps_per_epoch'] * config['lr_schedule']['warmup_epochs'],
                 alpha=config['lr_schedule']['alpha'] # Minimum learning rate value for decay as a fraction of initial_learning_rate 
             )
-        opt = opt(learning_rate=lr_schedule, weight_decay=1e-4)
+        opt = opt(learning_rate=lr_schedule)  #, weight_decay=1e-4)
     else:
         # usually paired with ReduceLROnPlateau callback
-        opt = opt(learning_rate=learning_rate, weight_decay=1e-4)
+        opt = opt(learning_rate=learning_rate) #, weight_decay=1e-4)
 
     conv_model.compile(optimizer = opt, loss = loss_fcn, metrics = METRICS)
     print(conv_model.summary())

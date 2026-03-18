@@ -82,7 +82,7 @@ PS = config["ps"]
 INPUTS = config["inputs"]
 TARGETS = config["targets"]
 SCALAR_VARS = config["scalar_vars"] 
-
+BSINFO = config["byte_scaling_vals"] # for scaling from 0 to 1 or -1 to +1 too
 if ngpu == 0:
     batchsize = 256
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -276,7 +276,7 @@ def prepare_sample(features):
     if SCALAR_VARS:
         # These need to be normalized/scaled
         for idx,scalar_var in enumerate(SCALAR_VARS):
-            scalarTmp = tf_bytescale(features[scalar_var], bsinfo[scalar_var]['vmin'], bsinfo[scalar_var]['vmax'])
+            scalarTmp = tf_bytescale(features[scalar_var], BSINFO[scalar_var]['vmin'], BSINFO[scalar_var]['vmax'])
             if idx == 0:
                 scalars = scalarTmp
             else:
@@ -286,6 +286,115 @@ def prepare_sample(features):
 
     # Sample weight should be same shape as targetInt
     return inputs, targetInt #, sample_weight
+
+#---------------------------------------------------------------------------------------------------------------
+def normalize_channel(tensor, channel_name):
+    info = BSINFO[channel_name]
+    c_min = info['vmin']
+    c_max = info['vmax']
+
+    # Cast to float
+    #tensor = tf.cast(tensor, tf.float32)
+
+    # First, assume the uint8 (0-255) maps to the min/max range
+    # Scaling uint8 to the physical units first:
+    physical = (tensor / 255.0) * (c_max - c_min) + c_min
+
+    if channel_name == 'Velocity':
+        # Scale physical -80 to 80 -> -1.0 to 1.0
+        # Formula: (val - center) / half_range
+        normalized = physical / max(abs(c_min), abs(c_max))
+    elif channel_name == 'AzShear' or channel_name == 'DivShear':
+        # For shear, we do a Power Transform (x^0.5)
+        # First, let's shift it to be purely positive for the transform
+        shifted = physical + abs(c_min) # Now 0.0 to 0.05
+        # Apply square root to "stretch" the low values
+        stretched = tf.sqrt(shifted)
+        # Final min-max scale to 0-1
+        normalized = stretched / tf.sqrt(c_max - c_min)
+    else:
+        # Scale physical min to max -> 0.0 to 1.0
+        # Formula: (val - min) / (max - min)
+        normalized = (physical - c_min) / (c_max - c_min)
+
+    return tf.clip_by_value(normalized, -1.0 if channel_name == 'Velocity' else 0.0, 1.0)
+
+#---------------------------------------------------------------------------------------------------------------
+# Moved feature_description outside for efficiency
+feature_description = {}
+for target in TARGETS:
+    feature_description[target] = tf.io.FixedLenFeature([1], tf.int64)
+for scalar_var in SCALAR_VARS:
+    feature_description[scalar_var] = tf.io.FixedLenFeature([1], tf.float32)
+for inp in INPUTS:
+    for chan in inp:
+        if chan != 'range_inv':
+            feature_description[chan] = tf.io.FixedLenFeature([], tf.string)
+
+def parse_and_prepare(example_proto):
+
+    # Parse the record
+    features = tf.io.parse_single_example(example_proto, feature_description)
+
+    # Process Targets
+    for ii, target in enumerate(TARGETS):
+        targetTmp = features[target]
+        if ii == 0:
+            targetInt = targetTmp
+        else:
+            targetInt = tf.stack([targetInt, targetTmp])
+
+    # Process Inputs
+    processed_inputs = {}
+
+    parsed_tensors = {}
+    for inp in INPUTS:
+        for chan in inp:
+            if chan == 'range':
+                parsed_tensors[chan] = tf.cast(tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[1], 1]), tf.float32)
+            elif chan == 'range_inv':
+                # Just a placeholder, logic handled below
+                continue
+            else:
+                parsed_tensors[chan] = tf.cast(tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[0], PS[1], 1]), tf.float32)
+            if chan != 'range_folded_mask' and chan != 'out_of_range_mask':
+                parsed_tensors[chan] = normalize_channel(parsed_tensors[chan], chan)
+
+    # Build 'radar' and 'coords' inputs
+    # Assuming INPUTS[0] is radar and INPUTS[1] is coords
+    for ii, inp_group in enumerate(INPUTS):
+        group_tensors = []
+        for varname in inp_group:
+            if varname == 'range':
+                data = parsed_tensors['range']
+                data = tf.repeat(tf.expand_dims(data, axis=0), repeats=PS[0], axis=0)
+            elif varname == 'range_inv':
+                # Use the 'range' data for the inversion
+                data = parsed_tensors['range']
+                data = tf.repeat(tf.expand_dims(1.0 / data, axis=0), repeats=PS[0], axis=0)
+            else:
+                data = parsed_tensors[varname]
+            group_tensors.append(data)
+
+        # Concat along channel axis (axis=2)
+        key = 'radar' if ii == 0 else 'coords'
+        processed_inputs[key] = tf.concat(group_tensors, axis=-1)
+
+    # Process Scalars
+    if SCALAR_VARS:
+        scalar_list = []
+        for var in SCALAR_VARS:
+            #val = tf_bytescale(features[var], BSINFO[var]['vmin'], BSINFO[var]['vmax'])
+            c_min = BSINFO[var]['vmin']
+            c_max = BSINFO[var]['vmax']
+            # Normalize 0 to 1
+            val = (features[var] - c_min) / (c_max - c_min)
+            scalar_list.append(val)
+        processed_inputs['scalars'] = tf.stack(scalar_list)
+
+    return processed_inputs, targetInt
+
+################################################################################################################
 ################################################################################################################
 
 # Load model and set up GPUs
@@ -379,8 +488,7 @@ test_ds = tf.data.TFRecordDataset(test_filenames, num_parallel_reads=AUTOTUNE)
 
 # Already handles the remainder since drop_remainder=False by default
 test_ds = (
-    test_ds.map(parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
-    .map(prepare_sample, num_parallel_calls=AUTOTUNE)
+    test_ds.map(parse_and_prepare, num_parallel_calls=AUTOTUNE)
     .batch(batchsize)  # Don't batch if making numpy arrays
     .prefetch(AUTOTUNE)
 )
