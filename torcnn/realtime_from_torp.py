@@ -13,6 +13,8 @@ import time
 from datetime import datetime, timedelta
 import xarray as xr
 import collections
+sys.path.append('/mnt/home/phi/localdata/PHI_Processing/generalServices/getCNN/Tor/')
+import addCnnTorToDB as add2db
 import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -257,6 +259,7 @@ def predict(model, samples):
                       Predictions will be added to this.
     Returns:
     - probs (list): The list of probabilities (0 to 1).
+    - end_index (list): Marks the index of the last object for each torpfile
     """
 
     # Here, we want to combine all of the tensors for predict efficiency.
@@ -318,12 +321,23 @@ def write_outputs(probs, samples, end_index, outpatt):
         logger.info(f"Wrote {outfile}")
 
 
+#---------------------------------------------------------------------------------
+def upload_to_SWRM(samples):
+
+    # super_list is a list of dicts.
+    # Each dict is a row/record from a TORP object.
+    super_list = []
+    for torpfile, sample in samples.items():
+        super_list += sample['df'].to_dict(orient='records')
+
+    add2db.main(super_list)
 #----------------------------------------------------------------------------------
 
 def run_model(listened_file,
               model_file,
               dataroot,
               outpatt,
+              db_upload=False,
 ):
 
     # One-time overhead
@@ -333,6 +347,11 @@ def run_model(listened_file,
     config = pickle.load(open(f'{os.path.dirname(model_file)}/model_config.pkl', 'rb'))
     ## Just a list to keep a log of files we've processed
     processed_list = []
+
+    #if db_upload:
+    #    # Hard-coded path
+    #    sys.path.append('/mnt/home/phi/localdata/PHI_Processing/generalServices/getCNN/Tor/')
+    #    import addCnnTorToDB as add2db
 
     while True:
 
@@ -353,6 +372,9 @@ def run_model(listened_file,
                 # Write the csvs
                 if len(probs):
                     write_outputs(probs, samples, end_index, outpatt)
+
+                    if db_upload:
+                        upload_to_SWRM(samples)
             
         logger.info('\nSleeping...')
         time.sleep(10)
@@ -368,38 +390,44 @@ if __name__ == "__main__":
         print('TORCNN_DATA env variable must be set.')
         sys.exit(1)
 
-    parser = argparse.ArgumentParser(description="Uses TORP detects from output csvs and WDSS2-processed " + \
+    myparser = argparse.ArgumentParser(description="Uses TORP detects from output csvs and WDSS2-processed " + \
                                                  "radar data (netcdfs) to predict prob(tor) from CNN. " + \
                                                  "Velocity data is dealiased with WDSS2+RAP data."
     )
-    parser.add_argument('listened_file',
+    myparser.add_argument('listened_file',
                         help="This file generates a new line when a TORP csv is created (per-radar per-time). " + \
                              "E.g., /sas8tb/jcintineo/torcnn_output/logs/MAIN-TORPLIST-A1.log", 
                         type=str
     )
-    parser.add_argument('-m',
+    myparser.add_argument('-m',
                         '--model',
                         help="import this CNN model. Default = static/model/fit_conv_model.keras",
                         default="static/model/fit_conv_model.keras",
                         type=str
     )
-    parser.add_argument('-d',
+    myparser.add_argument('-d',
                         '--dataroot',
                         help="root path to NEXRAD L2 data. Default= /ssd1/localdata_MRMS/realtime/radar/.",
                         default='/ssd1/localdata_MRMS/realtime/radar/',
                         type=str
     )
-    parser.add_argument('-o',
+    myparser.add_argument('-o',
                         '--outpatt',
                         help="Output directory pattern. Default = ${TORCNN_DATA}/products/{radar}/%%Y/%%Y%%m%%d/",
                         default=os.environ['TORCNN_DATA'] + "/products/{radar}/%Y/%Y%m%d/",
                         type=str
     )
+    myparser.add_argument('-u',
+                        '--db_upload',
+                        help="Use helper functions to upload to SWRM database",
+                        action="store_true",
+    )
     
-    args = parser.parse_args()
-
+    args = myparser.parse_args()
+        
     run_model(args.listened_file,
               args.model,
               args.dataroot,
-              args.outpatt
+              args.outpatt,
+              db_upload=args.db_upload,
     )
