@@ -196,14 +196,13 @@ def create_example(channels):
     return tf.train.Example(features=tf.train.Features(feature=features))
 
 #--------------------------------------------------------------------------------------------------
-def collect_and_write_tfrec(row,
-                            hs,
-                            varnames,
-                            bsinfo,
-                            datapatt1,
-                            outpatt,
-                            datapatt2=None,
-                            year_thresh=2019,
+def extract_row_to_bytes(row,
+                         hs,
+                         varnames,
+                         bsinfo,
+                         datapatt1,
+                         datapatt2=None,
+                         year_thresh=2019,
 ):
 
     """
@@ -214,158 +213,182 @@ def collect_and_write_tfrec(row,
         varnames (list): List of strings for the variable names
         bsinfo (dict): contains min and max scaling values for each varname
         datapatt1 (str): Full path data pattern. E.g., '/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
-        outpatt (str): Pattern for root outdir. E.g., '/raid/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
         datapatt2 (str): Secondary data pattern. E.g., '/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
         year_thresh (int): The threshold such that >= year_thresh will use datapatt2. Default is 2019.
+
+    Returns serialized bytes for a single row. 
+    Returns None if radar data is missing or processing fails.
     """
 
-    if row['Radar'] == '-99900':
-        return
-
-    cols = row.keys()
-
-    info = {} # contains predictor and target data, and metadata
-    info['az_hs'] = hs[0]
-    info['range_hs'] = hs[1]
-    info['Time'] = row['Time']
-    info['Radar'] = row['Radar']
-    info['RadarCWA'] = row['RadarCWA']
- 
-    info['obj_lat'] = row['Lat']
-    info['obj_lon'] = row['Lon']
-    info['RangeKm'] = row['RangeKm']                                                # Range from the radar for the storm object
-    info['iAzCenter'] = row['iAzCenter']                                            # the Azimuth coord index
-    info['iRanCenter'] = row['iRanCenter']                                          # the Range coord index
-    info['V_rot'] = row['V_rot']
-    info['V_rotDistance'] = row['V_rotDistance']
-    info['Elev'] = row['Elev']
-    info['tornado'] = np.int32(row['tornado'])
-    info['hail'] = row['hail']
-    info['wind'] = row['wind']
-    info['spout'] = row['spout']                                                    # landspout or waterspout
-    info['maghail'] = row['maghail']
-    info['magwind'] = row['magwind']
-    info['magtornado'] = -1 if row['magtornado'] == 'U' else float(row['magtornado'])
-    #info['severeWarned'] = row['severeWarned']
-    #info['tornadoWarned'] = row['tornadoWarned']
-    #info['marineWarned'] = row['marineWarned']    
     try:
-        info['pretor'] = row['pretor']
-        if info['pretor']:
-            info['tornado'] = np.int32(1) # NB the TORP csvs say tornado=0 for each pretor sample
-    except (KeyError, AttributeError) as err:
-        info['pretor'] = np.int32(0)   
- 
-    if row['spout']:
-        label = 'spout'
-    elif row['tornado']:
-        label = 'tor'
-    elif info['pretor']:
-        info['pretorMinutes'] = row['pretorMinutes']
-        ceil_pretorMinutes = int(np.ceil(row['pretorMinutes'] / 15) * 15)
-        if ceil_pretorMinutes == 0:
-            ceil_pretorMinutes = 15
-        elif ceil_pretorMinutes > 60:
-            ceil_pretorMinutes = 120
-        label = f'pretor_{ceil_pretorMinutes}'
-    elif row['hail']:
-        label = 'hail'
-    elif row['wind']:
-        label = 'wind'
-    else:
-        label = 'nonsev'
-   
- 
-    # Anchoring timestamp
-    raddt = datetime.strptime(row['Time'], '%Y%m%d-%H%M%S')
+        if row['Radar'] == '-99900':
+            return
 
-    for ii, varname in enumerate(varnames):
-        # Check datapatt2 if defined
-        if datapatt2:
-            if int(info['Time'][0:4]) >= year_thresh:
-                datapatt = datapatt2 
+        cols = row.keys()
+
+        info = {} # contains predictor and target data, and metadata
+        info['az_hs'] = hs[0]
+        info['range_hs'] = hs[1]
+        info['Time'] = row['Time']
+        info['Radar'] = row['Radar']
+        info['obj_lat'] = row['Lat']
+        info['obj_lon'] = row['Lon']
+        info['RangeKm'] = row['RangeKm']                                                # Range from the radar for the storm object
+        #info['iAzCenter'] = row['iAzCenter']                                            # the Azimuth coord index
+        #info['iRanCenter'] = row['iRanCenter']                                          # the Range coord index
+        info['V_rot'] = row['V_rot']
+        info['V_rotDistance'] = row['V_rotDistance']
+        info['Elev'] = row['Elev']
+        info['tornado'] = np.int32(row['tornado'])
+        info['hail'] = row['hail']
+        info['wind'] = row['wind']
+        info['spout'] = row['spout']                                                    # landspout or waterspout
+        info['maghail'] = row['maghail']
+        info['magwind'] = row['magwind']
+        info['magtornado'] = -1 if row['magtornado'] == 'U' else float(row['magtornado'])
+        info['pretorMinutes'] = row.get('pretorMinutes', -1.0)
+        #info['severeWarned'] = row['severeWarned']
+        #info['tornadoWarned'] = row['tornadoWarned']
+        #info['marineWarned'] = row['marineWarned']    
+        info['pretor'] = np.int32(row.get('pretor', 0))
+        if info['pretor']:
+                info['tornado'] = np.int32(1) # NB the TORP csvs say tornado=0 for each pretor sample
+     
+     
+        # Anchoring timestamp
+        raddt = datetime.strptime(row['Time'], '%Y%m%d-%H%M%S')
+
+        for ii, varname in enumerate(varnames):
+            # Check datapatt2 if defined
+            if datapatt2:
+                if int(info['Time'][0:4]) >= year_thresh:
+                    datapatt = datapatt2 
+                else:
+                    datapatt = datapatt1
             else:
                 datapatt = datapatt1
-        else:
-            datapatt = datapatt1
 
-        dpat = datapatt.replace('{radar}', row['Radar']).replace('{varname}', varname)
-        all_files = glob.glob(raddt.strftime(f"{os.path.dirname(dpat)}/*netcdf"))
-        dts = [datetime.strptime(os.path.basename(ff), '%Y%m%d-%H%M%S.netcdf') for ff in all_files]
-        try:
+            dpat = datapatt.replace('{radar}', row['Radar']).replace('{varname}', varname)
+            all_files = glob.glob(raddt.strftime(f"{os.path.dirname(dpat)}/*netcdf"))
+            if not all_files: return None # Early exit if files missing
+
+            dts = [datetime.strptime(os.path.basename(ff), '%Y%m%d-%H%M%S.netcdf') for ff in all_files]
             closest_dt = min(dts, key=lambda dt: abs(raddt - dt))
-        except ValueError:
-            logging.error(f"ValueError: no closest_dt, {row['Radar']}, {row['Time']}")
-            return
-        if abs(raddt - closest_dt).seconds > 600:
-            logging.error(f"{raddt} is too far from {closest_dt}. {row['Radar']} - {varname}")
-            return
-        idx = dts.index(closest_dt)
-        file_path = all_files[idx]
+            if abs(raddt - closest_dt).seconds > 600:
+                logging.error(f"{raddt} is too far from {closest_dt}. {row['Radar']} - {varname}")
+                return
+            idx = dts.index(closest_dt)
+            file_path = all_files[idx]
 
-        # Open the netCDF file using xarray
-        radds = xr.open_dataset(file_path)
+            # Open the netCDF file using xarray
+            radds = xr.open_dataset(file_path)
 
-        rad_sector, theta_sector, r_sector, az_idx, gate_idx = get_sector_patch(lat=row['Lat'],
-                                                                                lon=row['Lon'],
-                                                                                ds=radds,
-                                                                                hs=hs,
-                                                                                varname=varname
-        )
-
-        # Assert that the shape is correct
-        try:
-            assert(rad_sector.shape == (hs[0]*2, hs[1]*2))
-        except AssertionError as err:
-            print(f"{row['Radar']}, {row['Time']}, {varname}.shape == {rad_sector.shape}")
-            return
-
-        if ii == 0:
-            # Store indexes
-            info['az_idx'] = az_idx
-            info['gate_idx'] = gate_idx
-            # Store range on first iter
-            # 'range' is 1D!
-            info['range'] = np.expand_dims(utils.bytescale(r_sector,
-                                                           bsinfo['range']['vmin'],
-                                                           bsinfo['range']['vmax'],
-                                                           min_byte_val=1, # we also invert range, so keep it > 0
-                                                           max_byte_val=255
-                                           ), axis=-1
+            rad_sector, theta_sector, r_sector, az_idx, gate_idx = get_sector_patch(lat=row['Lat'],
+                                                                                    lon=row['Lon'],
+                                                                                    ds=radds,
+                                                                                    hs=hs,
+                                                                                    varname=varname
             )
-            info['out_of_range_mask'] = np.expand_dims( (rad_sector == OUT_OF_RANGE).astype(np.uint8), axis=-1)
-     
 
-        # Bytescale the data
-        rad_sector_scaled = np.expand_dims(utils.bytescale(rad_sector,
-                                                           bsinfo[varname]['vmin'],
-                                                           bsinfo[varname]['vmax'],
-                                                           min_byte_val=0,
-                                                           max_byte_val=255
-                                           ), axis=-1
-        )
+            # Assert that the shape is correct
+            if rad_sector.shape != (hs[0]*2, hs[1]*2): return None
 
-        # Encode range-folded region
-        if varname == 'Velocity':
-            range_folded_value = radds.attrs.get('RangeFolded', -99901.0)
-            range_folded = (rad_sector == range_folded_value).astype(np.uint8)
-            info['range_folded_mask'] = np.expand_dims(range_folded, axis=-1)
-        
+            if ii == 0:
+                # Store indexes
+                info['az_idx'] = az_idx
+                info['gate_idx'] = gate_idx
+                # Store range on first iter
+                # 'range' is 1D!
+                info['range'] = np.expand_dims(utils.bytescale(r_sector,
+                                                               bsinfo['range']['vmin'],
+                                                               bsinfo['range']['vmax'],
+                                                               min_byte_val=1, # we also invert range, so keep it > 0
+                                                               max_byte_val=255
+                                               ), axis=-1
+                )
+                info['out_of_range_mask'] = np.expand_dims( (rad_sector == OUT_OF_RANGE).astype(np.uint8), axis=-1)
+         
 
-        # Add to info
-        info[varname] = rad_sector_scaled
+            # Bytescale the data
+            rad_sector_scaled = np.expand_dims(utils.bytescale(rad_sector,
+                                                               bsinfo[varname]['vmin'],
+                                                               bsinfo[varname]['vmax'],
+                                                               min_byte_val=0,
+                                                               max_byte_val=255
+                                               ), axis=-1
+            )
 
+            # Encode range-folded region
+            if varname == 'Velocity':
+                range_folded_value = radds.attrs.get('RangeFolded', -99901.0)
+                range_folded = (rad_sector == range_folded_value).astype(np.uint8)
+                info['range_folded_mask'] = np.expand_dims(range_folded, axis=-1)
+            
 
-    # Write out the tfrec
-    outdir = f"{raddt.strftime(outpatt)}/{label}"
-    os.makedirs(outdir, exist_ok=True)
-    outfile = f"{outdir}/{row['Radar']}_{np.round(row['Lat'],2)}_{np.round(row['Lon'],2)}_{row['Time']}.tfrec"
+            # Add to info
+            info[varname] = rad_sector_scaled
 
-    with tf.io.TFRecordWriter(outfile) as writer:
         example = create_example(info)
-        writer.write(example.SerializeToString())
+        return example.SerializeToString()
 
-    logging.info(outfile)
+    except Exception as e:
+        # We catch the error but don't stop the shard from being written
+        logging.warning(f"Skipping row {row['Time']} due to error: {e}")
+        return None
+
+#----------------------------------------------------------------------------------------------------------
+
+def get_label(row):
+    """
+    Determines the class label for a row. 
+    Matches the logic used inside the TFRecord worker for folder/shard grouping.
+    """
+    if row['spout']:
+        return 'spout'
+    
+    # Pre-tornado logic with 15-minute intervals
+    if 'pretor' in row and row['pretor'] > 0:
+        mins = row['pretorMinutes']
+        # Handle potential NaNs or missing values gracefully
+        if pd.isna(mins):
+            return 'pretor_unknown'
+
+        ceil_mins = int(np.ceil(mins / 15) * 15)
+
+        if ceil_mins == 0:
+            ceil_mins = 15
+        elif ceil_mins > 60:
+            ceil_mins = 120 # Cap it at 120 per your worker logic
+
+        return f'pretor_{ceil_mins}'
+
+    # Check for tornado. Note: pretor samples may have tornado=0 in the CSV.
+    if row['tornado']:
+        return 'tornado'
+    
+    if row['hail']:
+        return 'hail'
+    
+    if row['wind']:
+        return 'wind'
+    
+    return 'nonsev'
+
+#----------------------------------------------------------------------------------------------------------
+
+def write_shard(data_list, month_year, label, shard_idx, out_root):
+    """Helper to write a list of serialized bytes to a TFRecord file."""
+    count = len(data_list)
+    outdir = os.path.join(out_root, month_year, label)
+    os.makedirs(outdir, exist_ok=True)
+    
+    filename = f"{label}_{month_year}_{shard_idx:03d}__n{count}.tfrec"
+    filepath = os.path.join(outdir, filename)
+    
+    with tf.io.TFRecordWriter(filepath) as writer:
+        for record in data_list:
+            writer.write(record)
+    print(f"  Saved {filename}")
 
 #----------------------------------------------------------------------------------------------------------
 #----------------------------------------------------------------------------------------------------------
@@ -374,30 +397,22 @@ if __name__ == "__main__":
 
     # Drive the parallel processing
     
-    dataset_type = 'WarningReportPreTornadoInfo' # 'WarningReportPreTornadoInfo' or 'WarningReportInfo'
+    #dataset_type = 'WarningReportPreTornadoInfo' # 'WarningReportPreTornadoInfo' or 'WarningReportInfo'
     
     # Load torp dataset
-    dataset = TORPDataset2(dirpath='/work2/jcintineo/TORP/',
-                          years=[2011],
+    #dataset = TORPDataset2(dirpath='/work2/jcintineo/TORP/',
+    #                      years=[2011],
                           #years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
-                          dataset_type=dataset_type
-    )
-    ds = dataset.load_dataframe()
-    
-    ds.loc[ds.magtornado == 'U', 'magtornado'] = -1
-    # Convert to numeric
-    ds.magtornado = pd.to_numeric(ds.magtornado)
-    
-    
-    # 2011-2018
-    datapatt1 = '/myrorss2/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
-    # 2019-2024
-    datapatt2 = '/myrorss2/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
-    
-    outpatt = f'/work2/jcintineo/torcnn/tfrecs/%Y/%Y%m%d/'
-    
+    #                      dataset_type=dataset_type
+    #)
+    #ds = dataset.load_dataframe()
+
+    max_shard_nsamples = 650
+
+    max_workers = 120 
+
     hs = halfsize = (64, 128)
-    
+
     varnames = ['Velocity',
                 'AzShear',
                 'DivShear',
@@ -407,49 +422,78 @@ if __name__ == "__main__":
                 'PhiDP',
                 'Zdr',
     ]
-    
+
     # Get byte-scaling info
     bsinfo = utils.get_bsinfo()
-    
+
     logger = logging.getLogger(__name__)
     logger.info(f"begin extract data and write TFRecords")
-    
+
+    # 2011-2018
+    datapatt1 = '/myrorss2/data/thea.sandmael/data/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+    # 2019-2024
+    datapatt2 = '/myrorss2/work/thea.sandmael/radar/%Y%m%d/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+
+    out_root = f'/work2/jcintineo/torcnn/tfrecs_combined/'
+
+    datadir = '/work2/jcintineo/TORP/combined_torp_rep_pretor/'
+
     # Common arguments to pass in
     # Do these varnames need to match those in the function?
-    # I assume so. 
-    collect_and_write_tfrec_args = dict(
+    # I assume so.
+    extract_row_to_bytes_args = dict(
         hs=halfsize,
         varnames=varnames,
         bsinfo=bsinfo,
         datapatt1=datapatt1,
-        outpatt=outpatt,
         datapatt2=datapatt2,
         year_thresh=2019,
     )
-    partial_collect_and_write_tfrec = functools.partial(collect_and_write_tfrec, **collect_and_write_tfrec_args)
+    # Set up the worker arguments (partial)
+    worker_func = functools.partial(extract_row_to_bytes, **extract_row_to_bytes_args)
+
+    years = [2015, 2016, 2017, 2018, 2019]
+
+    # Start the executor ONCE and reuse it for all years/months
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        for year in years:
     
-    number_of_rows = len(ds)
+            ds = pd.read_csv(glob.glob(f"{datadir}/{year}_*csv")[0])
+        
+            ds.loc[ds.magtornado == 'U', 'magtornado'] = -1
+            # Convert to numeric
+            ds.magtornado = pd.to_numeric(ds.magtornado)
+        
+            ds['label'] = ds.apply(get_label, axis=1)
+            ds['month_year'] = pd.to_datetime(ds['Time'], format='%Y%m%d-%H%M%S').dt.strftime('%Y%m')
+        
+            # Group by month and class
+            groups = ds.groupby(['month_year', 'label'])
     
-    max_workers = 40 #min(gfs_columns_extract_workers, os.cpu_count())
+            for (month_year, label), group_df in groups:
+                print(f"Processing Group: {month_year} | {label} ({len(group_df)} samples)")
+            
+                # --- FLUSH-AS-YOU-GO LOGIC ---
+                current_shard_results = []
+                shard_num = 0
     
-    with tqdm(total=number_of_rows) as pbar: # progress bar
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-    
-            for row in ds.itertuples():
-                # Convert the Pandas namedtuple-like object to a regular dictionary.
-                # This makes sure only simple, pickleable values are passed.
-                # You can also cherry-pick specific columns if 'row' has too many.
-                row_as_dict = row._asdict() # This converts it to an OrderedDict, which is pickleable
-                
-                futures.append(executor.submit(partial_collect_and_write_tfrec, row_as_dict))
-    
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(f"Error processing a row: {e}")
-                    logger.error(traceback.format_exc())
-                finally: 
-                    pbar.update(1)
+                futures = [executor.submit(worker_func, row._asdict()) for row in group_df.itertuples()]
+                with tqdm(total=len(futures), desc=f"{label}") as pbar:
+                    for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"{label}"):
+                        res = future.result()
+                        if res: current_shard_results.append(res)
+        
+                        # Check if buffer is full
+                        if len(current_shard_results) >= max_shard_nsamples:
+                            write_shard(current_shard_results, month_year, label, shard_num, out_root)
+                            current_shard_results = [] # Clear RAM immediately
+                            shard_num += 1
+                        
+                        pbar.update(1)
+
+                # Flush the final remainder for this group
+                if current_shard_results:
+                    write_shard(current_shard_results, month_year, label, shard_num, out_root)
+
+
 
