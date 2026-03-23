@@ -16,10 +16,10 @@ def tf_config():
     # The number of records/samples, NOT the number of files.
     # Find this apriori for sharded datasets using count_records.py
     ## output of count_records.py
-    cts = pickle.load(open('sample_counts.pickle','rb'))
-    train_years = np.arange(2011,2019,1, dtype=int)
-    val_years = [2019]
-    pos_classes = ['tor', 'pretor_15', 'pretor_30']
+    cts = pickle.load(open('sample_counts_combined.pickle','rb'))
+    train_years = [2011, 2012, 2013, 2014, 2015, 2016, 2017, 2019] # 2019 has no pretor counts
+    val_years = [2018]
+    pos_classes = ['tornado', 'pretor_15', 'pretor_30']
     neg_classes = ['hail', 'wind', 'nonsev']
     n_tsamples = 0
     for yy in train_years:
@@ -36,26 +36,26 @@ def tf_config():
         batchsize = max([ngpu,1]) * 256
         targets = ['tornado']
   
-        tfrec_dir = "/work2/jcintineo/torcnn/tfrecs_shard"
+        tfrec_dir = "/work2/jcintineo/torcnn/tfrecs_combined" 
         # N.B. Can't have any "//" in the train_list or val_list!!!
         # subdirs: hail, wind, nonsev, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
         train_list = []
         for yy in train_years:
             for cl in pos_classes + neg_classes:
-                train_list.append(f"{tfrec_dir}/{yy}/{yy}????_{cl}*tfrec")
+                train_list.append(f"{tfrec_dir}/{yy}??/{cl}/{cl}_{yy}??_*tfrec")
         val_list = []
         for yy in val_years:
             for cl in pos_classes + neg_classes:
-                val_list.append(f"{tfrec_dir}/{yy}/{yy}????_{cl}*tfrec") 
+                val_list.append(f"{tfrec_dir}/{yy}??/{cl}/{cl}_{yy}??_*tfrec") 
 
         outprefix = '/work2/jcintineo/torcnn/tests/2011-19/'
-        outdir = f'{outprefix}/test19'
+        outdir = f'{outprefix}/test01'
   
         # Inputs
         # 'Reflectivity', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear', 'RhoHV', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range', 'range_inv'
-        inputs.append(['Reflectivity', 'Velocity', 'RhoHV', 'range_folded_mask', 'out_of_range_mask'])
+        inputs.append(['Reflectivity', 'Velocity', 'RhoHV', 'range_folded_mask', 'out_of_range_mask','range'])
         #inputs.append(['range','range_inv']) # we need coords for coordconv
-        scalar_vars = ['RangeKm']
+        scalar_vars = []
   
         ps = (128,256)
         input_tuples = [(ps[0], ps[1], len(inputs[0]))]
