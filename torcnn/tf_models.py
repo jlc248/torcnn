@@ -164,7 +164,9 @@ def conv_coord_block(x, c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rat
         x = keras.layers.Dropout(rate=drop_rate)(x)
     return x,c
 #---------------------------------------------------------------------------------------------------------------------------------
-def conv_block(x, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, batch_norm=False, activation='relu', padding="same", spatial_dropout=0):
+def conv_block(x, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, batch_norm=False, activation='relu', padding="same",
+               spatial_dropout=0, use_attention=False,
+):
 
     for _ in range(n_convs):
         x = keras.layers.Conv2D(filters=filters,
@@ -174,11 +176,77 @@ def conv_block(x, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0, ba
         if batch_norm:
             x = keras.layers.BatchNormalization()(x)
         x = keras.layers.Activation(activation)(x)
+
+    if use_attention:
+        attn = channel_attention(x)
+        attn = spatial_attention(attn)
+        # Apply the gate
+        attn = LayerScale(init_value=0.0)(attn)
+        # Add back to the original identity
+        x = keras.layers.Add()([x, attn])
+
     if spatial_dropout > 0:
         x = keras.layers.SpatialDropout2D(spatial_dropout)(x) # Forces cross-channel learning
+
     x = keras.layers.MaxPool2D(pool_size =2, strides =2, padding ='same')(x)
         
     return x
+#---------------------------------------------------------------------------------------------------------------------------------
+@keras.saving.register_keras_serializable()
+class LayerScale(keras.layers.Layer):
+    """A learnable scalar multiplier initialized at 0."""
+    def __init__(self, init_value=0.0, **kwargs):
+        super().__init__(**kwargs)
+        self.init_value = init_value
+
+    def build(self, input_shape):
+        self.gamma = self.add_weight(
+            name="gamma",
+            shape=(1,),
+            initializer=keras.initializers.Constant(self.init_value),
+            trainable=True,
+        )
+
+    def call(self, x):
+        return x * self.gamma
+
+    def get_config(self):
+        """Get model configuration, used for saving model."""
+        config = super().get_config()
+        config.update({"init_value": self.init_value})
+        return config
+#---------------------------------------------------------------------------------------------------------------------------------
+def channel_attention(input_feature, ratio=4):
+    channel = input_feature.shape[-1]
+    
+    # Squeeze: Global Average and Max Pooling
+    avg_pool = keras.layers.GlobalAveragePooling2D()(input_feature)
+    max_pool = keras.layers.GlobalMaxPooling2D()(input_feature)
+    
+    # Excitation: Shared MLP
+    shared_layer_one = keras.layers.Dense(channel // ratio, activation='relu', kernel_initializer='he_normal', use_bias=True)
+    shared_layer_two = keras.layers.Dense(channel, kernel_initializer='he_normal', use_bias=True)
+    
+    avg_out = shared_layer_two(shared_layer_one(avg_pool))
+    max_out = shared_layer_two(shared_layer_one(max_pool))
+    
+    mask = keras.layers.Add()([avg_out, max_out])
+    mask = keras.layers.Activation('sigmoid')(mask)
+    mask = keras.layers.Reshape((1, 1, channel))(mask)
+    
+    return keras.layers.Multiply()([input_feature, mask])
+#---------------------------------------------------------------------------------------------------------------------------------
+def spatial_attention(input_feature):
+    # Channel-wise reduction: Avg and Max pool across the channel axis
+    avg_pool = ops.mean(input_feature, axis=-1, keepdims=True)
+    max_pool = ops.max(input_feature, axis=-1, keepdims=True)
+    
+    concat = keras.layers.Concatenate(axis=-1)([avg_pool, max_pool])
+    
+    # Generate spatial mask via 7x7 conv (standard for CBAM)
+    mask = keras.layers.Conv2D(filters=1, kernel_size=7, padding='same', activation='sigmoid', kernel_initializer='he_normal', use_bias=False)(concat)
+    
+    return keras.layers.Multiply()([input_feature, mask])
 #---------------------------------------------------------------------------------------------------------------------------------
 def cnn(config):
 
@@ -197,6 +265,7 @@ def cnn(config):
     coord_conv = config['coord_conv']
     label_smoothing = config['label_smoothing']
     regs = config['regs']
+    use_attention = config['use_attention']
     spatial_dropout = config['spatial_dropout']
 
     radar = conv = keras.Input(shape=input_tuples[0], name='radar')
@@ -237,7 +306,8 @@ def cnn(config):
                               batch_norm=batch_norm,
                               activation=conv_activation,
                               padding=padding,
-                              spatial_dropout=spatial_dropout[ii]
+                              spatial_dropout=spatial_dropout[ii],
+                              use_attention=use_attention,
             )  
 
 

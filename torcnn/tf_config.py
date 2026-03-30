@@ -49,11 +49,11 @@ def tf_config():
                 val_list.append(f"{tfrec_dir}/{yy}??/{cl}/{cl}_{yy}??_*tfrec") 
 
         outprefix = '/work2/jcintineo/torcnn/tests/2011-19/'
-        outdir = f'{outprefix}/test01'
+        outdir = f'{outprefix}/test04'
   
         # Inputs
         # 'Reflectivity', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear', 'RhoHV', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range', 'range_inv'
-        inputs.append(['Reflectivity', 'Velocity', 'RhoHV', 'range_folded_mask', 'out_of_range_mask','range'])
+        inputs.append(['Reflectivity', 'Velocity', 'RhoHV', 'SpectrumWidth', 'range_folded_mask', 'out_of_range_mask','range'])
         #inputs.append(['range','range_inv']) # we need coords for coordconv
         scalar_vars = []
   
@@ -108,6 +108,8 @@ def tf_config():
   
     return {
            'coord_conv':coord_conv,
+           'use_attention':False,
+           'pos_ratio': 0.05, # The positive fraction that should be in each batch
            'ps':ps,
            'img_aug':img_aug,
            'sample_weights':sample_weights,

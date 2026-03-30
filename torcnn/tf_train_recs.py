@@ -142,9 +142,9 @@ def normalize_channel(tensor, channel_name):
 # Moved feature_description outside for efficiency
 feature_description = {}
 for target in TARGETS:
-    feature_description[target] = tf.io.FixedLenFeature([1], tf.int64)
+    feature_description[target] = tf.io.FixedLenFeature([], tf.int64)
 for scalar_var in SCALAR_VARS:
-    feature_description[scalar_var] = tf.io.FixedLenFeature([1], tf.float32)
+    feature_description[scalar_var] = tf.io.FixedLenFeature([], tf.float32)
 for inp in INPUTS:
     for chan in inp:
         if chan != 'range_inv':
@@ -156,12 +156,8 @@ def parse_and_prepare(example_proto):
     features = tf.io.parse_single_example(example_proto, feature_description)
 
     # Process Targets
-    for ii, target in enumerate(TARGETS):
-        targetTmp = features[target]
-        if ii == 0:
-            targetInt = targetTmp
-        else:
-            targetInt = tf.stack([targetInt, targetTmp])
+    # This creates a single tensor of shape [num_targets]
+    targetInt = tf.stack([tf.cast(features[t], tf.float32) for t in TARGETS])
 
     # Process Inputs
     processed_inputs = {}
@@ -189,8 +185,8 @@ def parse_and_prepare(example_proto):
                 data = tf.repeat(tf.expand_dims(data, axis=0), repeats=PS[0], axis=0)
             elif varname == 'range_inv':
                 # Use the 'range' data for the inversion
-                data = parsed_tensors['range']
-                data = tf.repeat(tf.expand_dims(1.0 / data, axis=0), repeats=PS[0], axis=0)
+                r = parsed_tensors['range']
+                data = tf.repeat(tf.expand_dims(1.0 / (r + 1e-6), axis=0), repeats=PS[0], axis=0)
             else:
                 data = parsed_tensors[varname]
             group_tensors.append(data)
@@ -204,10 +200,10 @@ def parse_and_prepare(example_proto):
         scalar_list = []
         for var in SCALAR_VARS:
             #val = tf_bytescale(features[var], BSINFO[var]['vmin'], BSINFO[var]['vmax'])
-            c_min = BSINFO[var]['vmin']
-            c_max = BSINFO[var]['vmax']
+            c_min = tf.cast(BSINFO[var]['vmin'], tf.float32)
+            c_max = tf.cast(BSINFO[var]['vmax'], tf.float32)
             # Normalize 0 to 1
-            val = (features[var] - c_min) / (c_max - c_min) 
+            val = (features[var] - c_min) / (c_max - c_min + 1e-6) 
             scalar_list.append(val)
         processed_inputs['scalars'] = tf.stack(scalar_list)
 
@@ -307,48 +303,67 @@ def find_corrupted_tfrecords(all_files):
 
 
 #################################################################################################################################
-def get_dataset(filenames, batch_size, training=False):
+def get_dataset(pos_filenames, neg_filenames, batch_size, training=False, pos_ratio=0.1):
 
-    dataset = tf.data.Dataset.from_tensor_slices(filenames)
-    
-    # Shuffle the list of shard filenames
+    """
+    pos_filenames: List of shards containing tornado/pretor samples
+    neg_filenames: List of shards containing non-severe/hail/wind samples
+    pos_ratio: The fraction of the batch that should be positive (0.1 = 10/100)
+    """
+
+    def _build_stream(filenames, shuffle_files=True):
+        """Helper to create a raw stream of records from a list of shards."""
+        ds = tf.data.Dataset.from_tensor_slices(filenames)
+        if shuffle_files:
+            ds = ds.shuffle(len(filenames))
+        
+        # Infinite repeat for training
+        if training:
+            ds = ds.repeat()
+
+        num_threads = tf.data.AUTOTUNE if training else 4
+
+        # Interleave shards
+        ds = ds.interleave(
+            lambda x: tf.data.TFRecordDataset(x, num_parallel_reads=num_threads),
+            cycle_length=num_threads,
+            num_parallel_calls=num_threads,
+            deterministic=False
+        )
+        return ds
+
+    # --- THE MERGE POINT ---
     if training:
-        dataset = dataset.shuffle(len(filenames))
-    
-        # Repeat here to keep the file-stream infinite
-        dataset = dataset.repeat()
+        # Create two separate streams
+        pos_ds = _build_stream(pos_filenames, shuffle_files=True)
+        neg_ds = _build_stream(neg_filenames, shuffle_files=True)
 
-    # Reduce parallelism for validation to prevent the thread crash
-    # 4 is enough to keep your 40GB A100s fed during the small validation pass
-    num_threads = tf.data.AUTOTUNE if training else 4
+        # Shuffle individual samples within their respective streams
+        # 5000 is usually enough buffer to mix the interleaved shards
+        pos_ds = pos_ds.shuffle(5000)
+        neg_ds = neg_ds.shuffle(5000)
 
-    # Interleave reading from multiple shards
-    ## By setting deterministic=False in the interleave, you allow the pipeline to return
-    ## whichever shard's data is ready first. This prevents one slow I/O seek from
-    ## blocking the entire pipeline.
-    dataset = dataset.interleave(
-        lambda x: tf.data.TFRecordDataset(x, num_parallel_reads=num_threads),
-        cycle_length=num_threads,
-        num_parallel_calls=num_threads,
-        deterministic=False
-    )
+        # Balanced Sampling: Pick from pos_ds and neg_ds at the specified ratio
+        dataset = tf.data.Dataset.sample_from_datasets(
+            [pos_ds, neg_ds], 
+            weights=[pos_ratio, 1.0 - pos_ratio],
+            stop_on_empty_dataset=False
+        )
+    else:
+        # For validation or if no balancing is needed, use a single stream
+        all_files = pos_filenames + neg_filenames
+        dataset = _build_stream(all_files, shuffle_files=training)
+        if training: # This should really only be validation, but keeping this here JIC.
+            dataset = dataset.shuffle(10000)
 
-    if training:
-        # SHUFFLE 2: The "Micro" Shuffle
-        # Mixes individual samples from all the shards opened in step 4.
-        # 10,000 samples = ~2.5GB RAM for 250kB samples.
-        dataset = dataset.shuffle(buffer_size=10000)   
- 
+    # Standard preparation steps
     dataset = dataset.map(parse_and_prepare, num_parallel_calls=tf.data.AUTOTUNE)
-   
     dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(1 if not training else tf.data.AUTOTUNE)
-    
-    # Setting AutoShardPolicy
-    ## Use FILE if number of shards >> number of GPUs.
-    ## Use DATA only if you have a tiny number of massive files.
+    dataset = dataset.prefetch(tf.data.AUTOTUNE if training else 1)
+
+    # Options for AutoShard
     options = tf.data.Options()
-    options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.FILE 
+    options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.FILE
     dataset = dataset.with_options(options)
 
     return dataset
@@ -373,21 +388,18 @@ print('\nBuilding training Dataset')
 # Use a list comprehension to glob both patterns, as the tf.io.gfile.glob was segfaulting
 # tf.io.gfile.glob when using a variety of sources, like cloud and local.
 # glob.glob will only work on local disk.
-train_filenames = []
+all_train_files = []
 for pattern in config['train_list']:
-    train_filenames.extend(glob.glob(pattern))
-train_ds = get_dataset(train_filenames, BATCHSIZE, training=True)
+    all_train_files.extend(glob.glob(pattern))
 
+# Separate files based on folder/filename naming convention
+# Looking for 'tornado' or 'pretor' in the path
+pos_train_files = [f for f in all_train_files if 'tornado' in f or 'pretor' in f]
+neg_train_files = [f for f in all_train_files if not ('tornado' in f or 'pretor' in f)]
+print(f"Pos Shards: {len(pos_train_files)} | Neg Shards: {len(neg_train_files)}")
 print('steps_per_epoch:', config['steps_per_epoch'])
 
-# Augment data (optional)
-#if 'random_rotation' in config['img_aug']:
-#    aug_ds = train_ds.map(apply_augmentations, num_parallel_calls=AUTOTUNE)
-#    # Concatenate the original and augmented datasets (doubles dataset)
-#    train_ds = train_ds.concatenate(aug_ds)
-#    del aug_ds
-#if 'random_noise' in config['img_aug']: #original and concatenated augmentations are noised
-#    train_ds = train_ds.map(apply_noise, num_parallel_calls=AUTOTUNE)
+train_ds = get_dataset(pos_train_files, neg_train_files, BATCHSIZE, training=True, pos_ratio=config['pos_ratio'])
 
 # For quick_looks or error-checking
 #for inputs,labels in train_ds:
@@ -408,10 +420,14 @@ print('steps_per_epoch:', config['steps_per_epoch'])
 #    sys.exit()
 
 print('\nBuilding validation Dataset')
-val_filenames = []
+all_val_files = []
 for pattern in config['val_list']:
-    val_filenames.extend(glob.glob(pattern))
-val_ds = get_dataset(val_filenames, BATCHSIZE, training=False)
+    all_val_files.extend(glob.glob(pattern))
+
+pos_val_files = [f for f in all_val_files if 'tornado' in f or 'pretor' in f]
+neg_val_files = [f for f in all_val_files if not ('tornado' in f or 'pretor' in f)]
+val_ds = get_dataset(pos_val_files, neg_val_files, BATCHSIZE, training=False, pos_ratio=config['pos_ratio'])
+
 
 outdir = config['outdir']
 if not args.model:
