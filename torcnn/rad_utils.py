@@ -377,12 +377,12 @@ def get_remapped_radar_data(raw_file, raddt, target_tilt=0.5,
     return output
 
 #-----------------------------------------------------------------------------------------------
-def dealias_velocity_pyart(raddt,
-                           tilt=0.5,
-                           file_path=None,
-                           radar=None,
-                           n_gates=-1,
-                           rf_mask=None,
+def dealias_velocity_pyart(raddt: datetime,
+                           tilt: float = 0.5,
+                           file_path: str = None,
+                           radar: pyart.core.Radar = None,
+                           n_gates: int = -1,
+                           rf_mask: np.ndarray = None,
 ):
     """
     Using a pyart radar object or a file_path, dealias doppler velocity
@@ -398,87 +398,99 @@ def dealias_velocity_pyart(raddt,
       - n_gates (int): The number of gates to use (i.e., the index of the end gate)
       - rf_mask (np.ndarray dtype=bool): The mask for the range-folded resolution volumes 
     Returns:
-      - dvel (np.ma.MaskedArray): A 2D array in polar coords; the dealiased velocity data
+      - final_vel (np.ma.MaskedArray): A 2D array in polar coords; the dealiased velocity data
     """
 
     if file_path is not None:
-        raw_file = find_raw_file(filename=file_path)
-        radar = pyart.io.read_nexrad_archive(raw_file)
+        radar = pyart.io.read_nexrad_archive(file_path)
 
-    # Find inds of all tilts close to tilt
+    # Get all tilt angles
     tilts = radar.fixed_angle['data']
-    ind = np.where(np.abs(tilts - tilt) < 0.05)
+    ind = np.where(np.abs(tilts - tilt) < 0.1)[0] # Slightly wider tolerance (0.1)
 
-    # Now find the closest in time without going over
-    ## Get the arrays of start and end indices for each sweep
+    if len(ind) == 0:
+        raise ValueError(f"No tilts found near {tilt} degrees.")
+
+    # Identify which of these tilts actually has velocity data
+    valid_tilts = []
+    for i in ind:
+        # Check if the sweep index i contains velocity in the global fields
+        start_r = radar.sweep_start_ray_index['data'][i]
+        end_r = radar.sweep_end_ray_index['data'][i]
+        
+        # Check if velocity data in this ray range is not entirely masked
+        v_data = radar.fields['velocity']['data'][start_r:end_r+1]
+        if np.ma.count(v_data) > 0:
+            valid_tilts.append(i)
+
+    if not valid_tilts:
+        # Fallback: if no 0.5 tilt has velocity, de-aliasing is impossible
+        # Return raw velocity from the first 0.5 tilt or raise error
+        print(f"WARNING: No 0.5 deg tilts at {event['radar']} contain valid velocity data.")
+        return radar.extract_sweeps([ind[0]]).fields['velocity']['data']
+
+
+    # Get ray datetimes ONCE (Efficiency fix)
+    all_datetimes = pyart.util.datetimes_from_radar(radar)
     start_indices = radar.sweep_start_ray_index['data']
-    end_indices = radar.sweep_end_ray_index['data']
-    
-    ## Get the array of all ray timestamps (in seconds since a reference time)
-    all_ray_timestamps = radar.time['data']
-    
-    ## Get the reference time (often the start of the scan)
-    time_reference = radar.time['units']
-    
-    ## Loop through selected tilts to get start times
-    sweep_times = []
-    for i in ind[0]:
-        start_index = start_indices[i]
-        ## Get the timestamp of the first ray in the sweep
-        sweep_start_timestamp_seconds = all_ray_timestamps[start_index]
-        ## You can convert this to a datetime object for readability
-        ## Py-ART's `datetimes_from_radar` utility is great for this
-        sweep_start_datetime = pyart.util.datetimes_from_radar(radar)[start_index]
-        sweep_times.append(sweep_start_datetime)
 
-    ## Closest tilt ind, i (usually)
-    tilt_ind = ind[0][bisect.bisect_right(sweep_times, raddt)]
+    sweep_times = [all_datetimes[start_indices[i]] for i in valid_tilts]
+
+    # Find the closest tilt WITHOUT going out of bounds
+    # We want the tilt that started most recently relative to raddt
+    idx = bisect.bisect_right(sweep_times, raddt) - 1
+    idx = max(0, min(idx, len(valid_tilts) - 1)) # Clamp the index
     
-    # Define the gate filter on the single sweep/tilt 
+    tilt_ind = valid_tilts[idx]
+
+    # Extract and check
     radar_sweep = radar.extract_sweeps([tilt_ind])
-
-    # Check that velocity is valid here
     velocity_data = radar_sweep.fields['velocity']['data']
+    
+    # If the data is empty, we can't dealias
     if np.ma.count(velocity_data) == 0:
-        raise ValueError('np.ma.count(velocity_data) = 0. Bad data.')
-        return -1
+        # Instead of crashing, maybe return raw or zeros? 
+        # But if the model NEEDS dealiased data, we raise.
+        raise ValueError(f'Sweep {tilt_ind} has 0 valid velocity gates.')
 
-    # Filters, if desired
+    # Filter (Relaxed for better de-aliasing coverage)
     gatefilter = pyart.filters.GateFilter(radar_sweep)
-    # Exclude gates with low reflectivity
     if 'reflectivity' in radar_sweep.fields:
-        gatefilter.exclude_below('reflectivity', 5.0)
-    # Exclude gates with low cross-correlation coefficient
-    #if 'cross_correlation_ratio' in radar_sweep.fields:
-    #    cc_data = radar_sweep.fields['cross_correlation_ratio']['data']
-    #    if np.ma.count(cc_data) > 0:
-    #        gatefilter.exclude_below('cross_correlation_ratio', 0.85)
+        # Lowered to 0.0 to keep weak signal for the algorithm to "walk" through
+        gatefilter.exclude_below('reflectivity', 0.0)
 
-    # Use highest nyquist velocity. We're assuming that's the correct one for dealiasing when using split-cut scanning
+    # Dealias
     nyq = np.max(radar_sweep.instrument_parameters['nyquist_velocity']['data'])
 
-    raddict = pyart.correct.dealias_region_based(
-        radar_sweep,
-        vel_field='velocity',
-        nyquist_vel=nyq,
-        gatefilter=gatefilter,
-        centered=True
-    )
-    rad_masked = raddict['data']
-    # Only use the n_gates we want
-    if n_gates > 0:
-        rad_masked = rad_masked[:,0:n_gates]
-    # Reset the masked regions to 0
-    rad_masked[rad_masked.mask] = 0
-    # Apply the rf_mask
-    if rf_mask is not None:
-        rad_masked = np.where(rf_mask, np.nan, rad_masked)
+    try:
+        raddict = pyart.correct.dealias_region_based(
+            radar_sweep,
+            vel_field='velocity',
+            nyquist_vel=nyq,
+            gatefilter=gatefilter,
+            centered=True
+        )
+        rad_masked = raddict['data']
+    except Exception as e:
+        print(f"Py-ART Dealias internal failure: {e}")
+        return velocity_data # Fallback to raw
 
-    return rad_masked
+    # Post-processing
+    if n_gates > 0:
+        rad_masked = rad_masked[:, 0:n_gates]
+    
+    # Fill masked values with 0.0 as your original code did
+    # Note: Ensure this matches what your CNN expects (WDSS2 constants vs 0.0)
+    final_vel = np.ma.filled(rad_masked, fill_value=0.0)
+
+    if rf_mask is not None:
+        final_vel = np.where(rf_mask, np.nan, final_vel)
+
+    return final_vel
 #-----------------------------------------------------------------------------------------------
 def plot_radar(
-        data: Dict[str,Any],
-        channels: List[str]=['Reflectivity','Velocity'],
+        data: dict,
+        channels: list=['Reflectivity','Velocity'],
         fig:plt.Figure=None,
         include_cbar:bool=False,
         include_title:bool=True,
@@ -559,15 +571,15 @@ def plot_radar(
         if full_ppi:
             tt = [90, 180, 270, 360]
             ax.set_thetagrids(tt, labels=[str(_) + '$^\circ$' for _ in tt], fontsize=fs)
-        else: 
-            tt = np.linspace(az_lower_to_use, data['az_upper'], 4)
-            tt_labs = []
-            for theta_lab in tt:
-                if theta_lab < 0:
-                    tt_labs.append(str(int(round(theta_lab+360))) + '$^\circ$')
-                else:
-                    tt_labs.append(str(int(round(theta_lab))) + '$^\circ$')
-            ax.set_thetagrids(tt, labels=tt_labs, fontsize=fs)
+        #else: # Theta labeling 
+        #    tt = np.linspace(az_lower_to_use, data['az_upper'], 4)
+        #    tt_labs = []
+        #    for theta_lab in tt:
+        #        if theta_lab < 0:
+        #            tt_labs.append(str(int(round(theta_lab+360))) + '$^\circ$')
+        #        else:
+        #            tt_labs.append(str(int(round(theta_lab))) + '$^\circ$')
+        #    ax.set_thetagrids(tt, labels=tt_labs, fontsize=fs)
 
         ax.grid(linestyle=":", color='black')
  
@@ -980,7 +992,40 @@ def get_azimuth_range_from_latlon(
 
     return azimuth_index, gate_index, calculated_azimuth_deg, calculated_slant_range_m
 
+#-----------------------------------------------------------------------------------------------------------------------
+def get_azimuth_range_from_pyart(target_lat, target_lon, radar_sweep):
+    """
+    Calculates azimuth/gate indices from a single-sweep Py-ART Radar object.
+    """
+    # Radar location and metadata
+    radar_lat = radar_sweep.latitude['data'][0]
+    radar_lon = radar_sweep.longitude['data'][0]
+    radar_height = radar_sweep.altitude['data'][0]
+    elevation = radar_sweep.fixed_angle['data'][0]
 
+    radar_point = Point(radar_lat, radar_lon)
+    target_point = Point(target_lat, target_lon)
+
+    # Calculate ground distance and bearing
+    ground_dist = geodesic(radar_point, target_point).meters
+    calc_az = calculate_initial_bearing(radar_lat, radar_lon, target_lat, target_lon)
+
+    # Curvature-corrected slant range
+    calc_slant_range = ground_range_to_slant_range(ground_dist, radar_height, elevation)
+
+    # Find nearest indices
+    az_data = radar_sweep.azimuth['data']
+    rng_data = radar_sweep.range['data']
+
+    az_idx = np.argmin(np.abs(az_data - calc_az))
+    gate_idx = np.argmin(np.abs(rng_data - calc_slant_range))
+
+    if gate_idx >= len(rng_data) - 1:
+        raise ValueError("Lat/lon location is outside the radar's maximum range.")
+
+    return az_idx, gate_idx, calc_az, calc_slant_range
+
+#------------------------------------------------------------------------------------------------------------------------
 if __name__ == "__main__":
     
     #file_path = '/data/thea.sandmael/data/radar/20160509/KLSX/netcdf/Reflectivity/00.50/20160509-221256.netcdf'

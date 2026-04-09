@@ -116,8 +116,8 @@ def create_tensor(row,
                     #).astype(np.float32)
 
                     # Normalize in physical units
-                    rmin = bsinfo[varname]['vmin']
-                    rmax = bsinfo[varname]['vmax']
+                    rmin = bsinfo['range']['vmin']
+                    rmax = bsinfo['range']['vmax']
                     range_data = (range_data - rmin) / (rmax - rmin)
                     range_data[range_data < 0] = 0
                     range_data[range_data > 1] = 1
