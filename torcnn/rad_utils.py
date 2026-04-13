@@ -326,7 +326,7 @@ def get_remapped_radar_data(raw_file, raddt, target_tilt=0.5,
             indices.append(n)
     radar_at_tilt = radar.extract_sweeps(list(set(indices)))
 
-    # Note that this takes a lot of time to run 
+    # Note that this takes a long time to run 
     if 'specific_differential_phase' in fields and 'differential_phase' in radar_at_tilt.fields:
         try:
             kdp_dict, _, _ = pyart.retrieve.kdp_schneebeli(
@@ -383,7 +383,7 @@ def dealias_velocity_pyart(raddt: datetime,
                            radar: pyart.core.Radar = None,
                            n_gates: int = -1,
                            rf_mask: np.ndarray = None,
-):
+) -> np.ndarray, pyart.core.Radar:
     """
     Using a pyart radar object or a file_path, dealias doppler velocity
     data and return the numpy array. Assumes that only one of file_path
@@ -393,12 +393,13 @@ def dealias_velocity_pyart(raddt: datetime,
       - raddt (datetime.datetime): use the tilt closest (but before) this time
       - tilt (float): use the tilt closest to this value (in degrees)
       - file_path (str): Full path to WDSS2 netcdf. Will use this to find
-                         the correct/corresponding raw NEXRAD file.
+                         the correct/corresponding raw NEXRAD file. **NOT SUPPORTED**
       - radar (pyart.core.Radar): Object with all of the NEXRAD data that is needed.
       - n_gates (int): The number of gates to use (i.e., the index of the end gate)
       - rf_mask (np.ndarray dtype=bool): The mask for the range-folded resolution volumes 
     Returns:
       - final_vel (np.ma.MaskedArray): A 2D array in polar coords; the dealiased velocity data
+      - radar_sweep (pyart.core.Radar): Pyart object for the sweep corresponding to raddt
     """
 
     if file_path is not None:
@@ -440,9 +441,8 @@ def dealias_velocity_pyart(raddt: datetime,
     # We want the tilt that started most recently relative to raddt
     idx = bisect.bisect_right(sweep_times, raddt) - 1
     idx = max(0, min(idx, len(valid_tilts) - 1)) # Clamp the index
-    
     tilt_ind = valid_tilts[idx]
-
+    
     # Extract and check
     radar_sweep = radar.extract_sweeps([tilt_ind])
     velocity_data = radar_sweep.fields['velocity']['data']
@@ -486,7 +486,7 @@ def dealias_velocity_pyart(raddt: datetime,
     if rf_mask is not None:
         final_vel = np.where(rf_mask, np.nan, final_vel)
 
-    return final_vel
+    return final_vel, radar_sweep
 #-----------------------------------------------------------------------------------------------
 def plot_radar(
         data: dict,
@@ -649,7 +649,7 @@ def plot_from_wdss2(file_path,
                 sys.exit(1)
             idx = dts.index(closest_dt)
             file_paths.append(all_files[idx])
-
+    
     if not oneplot:
         # Determine subplot layout based on number of plots
         if len(file_paths) == 2: nrows, ncols, figsize, fs = 1, 2, (12,5), 10
@@ -817,7 +817,9 @@ def plot_from_wdss2(file_path,
                fig=fig,
                include_cbar=True,
                include_title=False,
-               full_ppi=full_ppi
+               full_ppi=full_ppi,
+               n_rows=nrows,
+               n_cols=ncols,
     )
  
     if not oneplot:
@@ -1065,8 +1067,8 @@ if __name__ == "__main__":
     #target_lat, target_lon = 35.5278, -103.543
 
     # Crosses due North
-    file_path = '/myrorss2/work/thea.sandmael/radar/20240613/KLSX/netcdf/AliasedVelocity/00.50/20240613-223435.netcdf'
-    target_lat, target_lon = 40.0899, -91.7384
+    file_path = '/home/john.cintineo/temp_KDVN/20260402/KDVN/netcdf/Velocity/00.50/20260402-210716.netcdf'
+    target_lat, target_lon = 41.43, -91.71
 
     # EF4 example (KFWS)
     #file_path = '/myrorss2/data/thea.sandmael/data/radar/20170429/KFWS/netcdf/Velocity/00.50/20170429-230006.netcdf' #20170429-230946.netcdf'
@@ -1075,8 +1077,8 @@ if __name__ == "__main__":
     patch_size = 64, 128 #120//2, 240//2 # n_az_patch, n_gate_patch # these are half-sizes
 
     #varname = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    varname = ['AliasedVelocity', 'AliasedVelocity_pyart', 'Velocity'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
-    varname = 'AliasedVelocity_pyart'    
+    varname = ['Reflectivity', 'Velocity', 'RhoHV','SpectrumWidth'] #, 'RhoHV', 'AzShear'] #'RhoHV', 'Zdr', 'PhiDP', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear']
+    #varname = 'AliasedVelocity_pyart'    
 
     fig, radar = plot_from_wdss2(file_path,
                                  varname=varname,
