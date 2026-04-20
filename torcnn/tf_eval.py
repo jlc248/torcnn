@@ -429,10 +429,10 @@ if filelist:
     val_lists = [filelist]
 else:
     # Create the test dataset for running the permutation
-    year = "2019"
-    inroot = f"/work2/jcintineo/torcnn/tfrecs_shard/{year}/"
+    year = "2018"
+    inroot = f"/work2/jcintineo/torcnn/tfrecs_combined/{year}*/"
     # subdirs: nontor, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
-    subglobs = ["_tor_", "_wind_", "_hail_", "_nonsev_", "pretor_15", "pretor_30"]
+    subglobs = ["tornado", "wind", "hail", "nonsev", "pretor_15", "pretor_30"]
     
     # leave these empty if you only want one run
     #month_subdirs = ['01-02','03','04','05','06','07','08','09','10','11-12']
@@ -457,7 +457,7 @@ else:
     else:
         val_lists = []
         for subglob in subglobs:
-            val_lists.append(f"{inroot}/{year}*{subglob}*tfrec")  # this is your "one-run" case
+            val_lists.append(f"{inroot}/{subglob}/{subglob}*tfrec")  # this is your "one-run" case
 
 
 #for ii, val_list in enumerate(val_lists):
@@ -469,7 +469,11 @@ else:
     for pattern in val_lists:
         test_filenames.extend(glob.glob(pattern))
    
-n_samples = len(test_filenames)
+# Get n_samples for sharded list
+n_samples = 0
+for tfile in test_filenames:
+    n_samples += int(os.path.basename(tfile).split('__n')[1].split('.')[0])
+
 print("\nNumber of samples:", n_samples, "\n")
 
 try:

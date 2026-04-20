@@ -20,7 +20,7 @@ plot_info = {
 
 def decode_and_visualize_tfrecord(
     tfrecord_path,
-    image_keys=['Reflectivity', 'Velocity', 'RhoHV', 'AzShear'],
+    image_keys=['Reflectivity', 'Velocity', 'RhoHV', 'SpectrumWidth'],
     all_2d_keys=['Reflectivity', 'Velocity', 'RhoHV', 'AzShear', 'DivShear',
                  'Zdr', 'PhiDP', 'SpectrumWidth'],
     image_shape=(128, 256, 1),  # You'll need to know the original shape of your 2D arrays
@@ -114,10 +114,11 @@ def decode_and_visualize_tfrecord(
         for key, value in features.items():
                 # Handle TensorFlow strings for printing
                 if isinstance(value, tf.Tensor) and value.dtype == tf.string:
-                    try:
-                        print(f"{key}: {value.numpy().decode('utf-8')}")
-                    except Exception:
-                        print(f"{key}: {value.numpy()}") # Fallback if not utf-8
+                    pass
+                    #try:
+                    #    print(f"{key}: {value.numpy().decode('utf-8')}")
+                    #except Exception:
+                    #    print(f"{key}: {value.numpy()}") # Fallback if not utf-8
                 else:
                     # For non-string scalars (int, float), print their value
                     # For other numerical tensors, we'll check their shape next
@@ -167,7 +168,6 @@ def decode_and_visualize_tfrecord(
                 #        img = (img - np.min(img)) / (np.max(img) - np.min(img))
                 #    else:
                 #        img = np.zeros_like(img) # Handle case where all values are the same
-                
                 ax.imshow(img, cmap=plot_info[varname]['cmap'], vmin=plot_info[varname]['vmin'], vmax=plot_info[varname]['vmax'])
                 ax.set_title(labels_to_plot[j])
                 ax.axis('off')
@@ -187,9 +187,10 @@ def decode_and_visualize_tfrecord(
 #tfrec='/raid/jcintineo/torcnn/tfrecs/2013/20130519//tor/KTLX_35.32_-97.12_20130519-232322.tfrec'
 #tfrec='/raid/jcintineo/torcnn/tfrecs/2017/20170429//tor/KFWS_32.55_-95.93_20170429-230946.tfrec'
 #tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200521/tor/KGLD_37.92_-102.31_20200521-215207.tfrec'
-#tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200522/tor/KGSP_35.1_-81.5_20200522-192612.tfrec'
+tfrec='/raid/jcintineo/torcnn/tfrecs/2020/20200522/tor/KGSP_35.1_-81.5_20200522-192612.tfrec'
 #tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200523/tor/KDVN_41.78_-91.4_20200523-173539.tfrec' # "upside down" cell?
 #tfrec='/raid/jcintineo/torcnn/tfrecs2/2020/20200607/tor/KABR_44.91_-99.45_20200607-231744.tfrec' # some space-time displacement
 #tfrec='/raid/jcintineo/torcnn/tfrecs/2023/20230331/nontor/KNQA_35.45_-90.16_20230331-223445.tfrec'
-tfrec='/raid/jcintineo/torcnn/tfrecs/2023/20230331/nontor/KNQA_35.7_-89.98_20230331-223445.tfrec'
+#tfrec='/raid/jcintineo/torcnn/tfrecs/2023/20230331/nontor/KNQA_35.7_-89.98_20230331-223445.tfrec'
+tfrec='/home/john.cintineo/temp_KDVN/tfrecs/202604/tornado/tornado_202604_000__n1.tfrec'
 decode_and_visualize_tfrecord(tfrec, image_dtype=np.uint8)

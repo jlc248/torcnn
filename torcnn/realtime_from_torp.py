@@ -13,7 +13,8 @@ import time
 from datetime import datetime, timedelta
 import xarray as xr
 import collections
-sys.path.append('/mnt/home/phi/localdata/PHI_Processing/generalServices/getCNN/Tor/')
+#sys.path.append('/mnt/home/phi/localdata/PHI_Processing/generalServices/getCNN/Tor/')
+sys.path.append('/usr/local/wdssii/phi_proc/generalServices/getCNN/TOR/')
 import addCnnTorToDB as add2db
 import logging
 logger = logging.getLogger(__name__)
@@ -294,7 +295,7 @@ def write_outputs(probs, samples, end_index, outpatt):
     Write out amended TORP csvs.
 
     Args:
-        probs (list): A list of float probabilities, 0 to 1. May be -1 if invalid.
+        probs (np.ndarray): An array of float probabilities, 0 to 1. May be -1 if invalid.
         samples (dict): Keys are the torpfiles (csvs). Contains the 'df' for each torpfile.
         end_index (list): List of the final index in probs for each torpfile.
         outpatt (str): Output directory pattern.
@@ -368,6 +369,7 @@ def run_model(listened_file,
             if len(samples):
                 # Make predictions
                 probs, end_index = predict(model, samples)
+                probs = np.round(np.array(probs), 2)
 
                 # Write the csvs
                 if len(probs):

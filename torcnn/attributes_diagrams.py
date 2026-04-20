@@ -41,8 +41,9 @@ FONT_SIZE = 14
 plt.rc("font", size=FONT_SIZE)
 plt.rc("axes", titlesize=FONT_SIZE)
 plt.rc("axes", labelsize=FONT_SIZE)
-plt.rc("xtick", labelsize=FONT_SIZE)
-plt.rc("ytick", labelsize=FONT_SIZE)
+plt.rc("xtick", labelsize=FONT_SIZE+4)
+plt.rc("ytick", labelsize=FONT_SIZE+4)
+plt.rc("axes", labelsize=FONT_SIZE+4)
 plt.rc("legend", fontsize=FONT_SIZE)
 plt.rc("figure", titlesize=FONT_SIZE)
 
@@ -617,8 +618,10 @@ def rel_with_obs_and_fcst_cts(obs_cts, fcst_cts, bins, outfilename,
         elif labels is not None:
             leg = axes_object.legend([line_obj,line_obj2], labels,loc='lower right',fontsize=14)
 
-    axes_object.set_xlabel('Forecast probability')
-    axes_object.set_ylabel('Conditional event frequency')
+    axes_object.tick_params(axis='x', labelsize=FONT_SIZE)
+    axes_object.tick_params(axis='y', labelsize=FONT_SIZE)
+    axes_object.set_xlabel('Forecast probability', fontsize=FONT_SIZE)
+    axes_object.set_ylabel('Conditional event frequency',fontsize=FONT_SIZE)
     axes_object.set_xlim(0., 1.)
     axes_object.set_ylim(0., 1.)
     

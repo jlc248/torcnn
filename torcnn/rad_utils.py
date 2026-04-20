@@ -383,7 +383,7 @@ def dealias_velocity_pyart(raddt: datetime,
                            radar: pyart.core.Radar = None,
                            n_gates: int = -1,
                            rf_mask: np.ndarray = None,
-) -> np.ndarray, pyart.core.Radar:
+) -> tuple[np.ndarray, pyart.core.radar.Radar]:
     """
     Using a pyart radar object or a file_path, dealias doppler velocity
     data and return the numpy array. Assumes that only one of file_path
@@ -412,36 +412,21 @@ def dealias_velocity_pyart(raddt: datetime,
     if len(ind) == 0:
         raise ValueError(f"No tilts found near {tilt} degrees.")
 
-    # Identify which of these tilts actually has velocity data
-    valid_tilts = []
-    for i in ind:
-        # Check if the sweep index i contains velocity in the global fields
-        start_r = radar.sweep_start_ray_index['data'][i]
-        end_r = radar.sweep_end_ray_index['data'][i]
-        
-        # Check if velocity data in this ray range is not entirely masked
-        v_data = radar.fields['velocity']['data'][start_r:end_r+1]
-        if np.ma.count(v_data) > 0:
-            valid_tilts.append(i)
-
-    if not valid_tilts:
-        # Fallback: if no 0.5 tilt has velocity, de-aliasing is impossible
-        # Return raw velocity from the first 0.5 tilt or raise error
-        print(f"WARNING: No 0.5 deg tilts at {event['radar']} contain valid velocity data.")
-        return radar.extract_sweeps([ind[0]]).fields['velocity']['data']
-
-
-    # Get ray datetimes ONCE (Efficiency fix)
+    # Get ray datetimes ONCE
     all_datetimes = pyart.util.datetimes_from_radar(radar)
     start_indices = radar.sweep_start_ray_index['data']
 
-    sweep_times = [all_datetimes[start_indices[i]] for i in valid_tilts]
+    sweep_times = [all_datetimes[start_indices[i]] for i in ind]
+    standard_sweep_times = [
+        datetime(t.year, t.month, t.day, t.hour, t.minute, t.second, t.microsecond) 
+        for t in sweep_times
+    ]
 
     # Find the closest tilt WITHOUT going out of bounds
     # We want the tilt that started most recently relative to raddt
-    idx = bisect.bisect_right(sweep_times, raddt) - 1
-    idx = max(0, min(idx, len(valid_tilts) - 1)) # Clamp the index
-    tilt_ind = valid_tilts[idx]
+    idx = np.argmin([abs((t - raddt).total_seconds()) for t in standard_sweep_times])
+    tilt_ind = ind[idx]
+    
     
     # Extract and check
     radar_sweep = radar.extract_sweeps([tilt_ind])
@@ -467,26 +452,35 @@ def dealias_velocity_pyart(raddt: datetime,
             radar_sweep,
             vel_field='velocity',
             nyquist_vel=nyq,
-            gatefilter=gatefilter,
+            gatefilter=None, #gatefilter,
             centered=True
         )
-        rad_masked = raddict['data']
+        d_vel = raddict['data']
     except Exception as e:
         print(f"Py-ART Dealias internal failure: {e}")
         return velocity_data # Fallback to raw
 
-    # Post-processing
-    if n_gates > 0:
-        rad_masked = rad_masked[:, 0:n_gates]
+
+    # Inject the dealiased velocity into radar object    
+    new_field = radar.fields['velocity'].copy()
+    new_field['data'] = np.ma.masked_all(radar.fields['velocity']['data'].shape)
+    new_field['long_name'] = 'Dealiased Doppler velocity'
+    radar.add_field('dealiased_velocity', new_field)
+
+    # Map the processed sweep data back to the global radar indices
+    global_start = radar.sweep_start_ray_index['data'][tilt_ind]
+    global_end = radar.sweep_end_ray_index['data'][tilt_ind]
+
+    radar.fields['dealiased_velocity']['data'][global_start:global_end+1, :d_vel.shape[1]] = d_vel
+    #final_vel = np.ma.filled(d_vel, fill_value=0.0)
+
+    # Handle n_gates trimming for the return array if requested
+    final_dvel = d_vel[:, :n_gates] if n_gates > 0 else d_vel
+
+    #if rf_mask is not None:
+    #    final_vel = np.where(rf_mask, np.nan, final_vel)
     
-    # Fill masked values with 0.0 as your original code did
-    # Note: Ensure this matches what your CNN expects (WDSS2 constants vs 0.0)
-    final_vel = np.ma.filled(rad_masked, fill_value=0.0)
-
-    if rf_mask is not None:
-        final_vel = np.where(rf_mask, np.nan, final_vel)
-
-    return final_vel, radar_sweep
+    return final_dvel, radar
 #-----------------------------------------------------------------------------------------------
 def plot_radar(
         data: dict,

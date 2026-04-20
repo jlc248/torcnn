@@ -142,11 +142,9 @@ def create_tensor(row,
                 if varname == 'Velocity':
                     # Scale physical -100 to 100 -> -1.0 to 1.0
                     # Formula: (val - center) / half_range
-                    normalized = rad_sector / max(abs(rmin), abs(rmax))
+                    rad_sector_scaled = np.clip(rad_sector / max(abs(rmin), abs(rmax)), -1., 1.)
                 else: 
-                    rad_sector_scaled = (rad_sector - rmin) / (rmax - rmin)
-                    rad_sector_scaled[rad_sector_scaled < 0] = 0
-                    rad_sector_scaled[rad_sector_scaled > 1] = 1
+                    rad_sector_scaled = np.clip((rad_sector - rmin) / (rmax - rmin), 0, 1)
 
                 # Encode range-folded region
                 if varname == 'Velocity':
@@ -178,20 +176,20 @@ model = 'static/model/fit_conv_model.keras'
 conv_model = keras.models.load_model(model, compile=False)
 config = pickle.load(open(f'{os.path.dirname(model)}/model_config.pkl', 'rb'))
 # Output directory
-outdir=f'/sas8tb/jcintineo/offline/20260306-07_KINX/'
+outdir=f'/raid/sas8tb/jcintineo/offline/20260402_KDVN/'
 os.makedirs(outdir, exist_ok=True)
 # Root dir for the input data
-rootdir = '/ssd1/localdata_MRMS/realtime/radar/'
+rootdir = '/home/john.cintineo/temp_KDVN/20260402' #'/ssd1/localdata_MRMS/realtime/radar/'
 
 # Get and combine the csvs
-csvs = np.sort(glob.glob(f'{rootdir}/KINX/TORPcsvShort/*csv'))
+csvs = np.sort(glob.glob(f'/raid/sas8tb/jcintineo/torcnn_output/products/KDVN/2026/20260402/20260402-210716_KDVN_0050_tordetections_torcnn.csv'))
 df_list = [pd.read_csv(f, index_col=False) for f in csvs] # index_col=False for trailing commas
 combined_df = pd.concat(df_list, ignore_index=True)
 # Drop missing rows
 ds = combined_df.dropna(subset=['lat'])
 logging.info(f'Combined {len(ds)} records')
 logging.warning(f'{len(combined_df) - len(ds)} rows were missing/null.')
-datapatt = rootdir + '/{radar}/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
+datapatt = rootdir + '/{radar}/netcdf/{varname}/00.50/%Y%m%d-%H%M%S.netcdf'
 
 inputs = config['inputs']
 ps = config['ps']
@@ -224,6 +222,15 @@ for row in ds.itertuples():
         if len(inputs) > 1:
             struct['coords'][sample_cter] = np.zeros((1, ps[0], ps[1], len(inputs[1])), dtype=np.float32)
 
+    _, _, _, nchan = all_inputs['radar'].shape
+    for ii in range(nchan):
+        plt.imshow(all_inputs['radar'][0,...,ii])
+        plt.show()
+        if ii == 1:
+            pickle.dump(all_inputs['radar'][0,...,ii], open('v_from-csvs.pkl','wb'))
+
+    sys.exit()     
+
 
     struct['radar'][sample_cter] = all_inputs['radar']
     if len(inputs) > 1:
@@ -253,7 +260,7 @@ for row in ds.itertuples():
         all_preds = np.concatenate((all_preds, np.squeeze(preds)))
 
 print(all_preds.shape)
-ds['torcnn_probability'] = all_preds
+ds['torcnn_probability2'] = all_preds
 
 ds = ds.sort_values(by=['id', 'current_time_of_detection'])
 

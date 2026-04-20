@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from geopy.distance import geodesic
 from geopy.point import Point
+from netCDF4 import num2date
+import bisect
 
 # Assuming these are imported from your rad_utils.py
 import rad_utils 
@@ -19,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # --- AWS Configuration ---
 fs = s3fs.S3FileSystem(anon=True)
-
+#-------------------------------------------------------------------------------------------------------
 def find_s3_nexrad(radar, dt):
     """Search NOAA S3 bucket for the closest L2 file."""
     bucket = "unidata-nexrad-level2"
@@ -40,7 +42,64 @@ def find_s3_nexrad(radar, dt):
         print('WARNING: exception when getting s3 URL')
         return None
 
-def get_sector_data(radar, lat, lon, timestamp, hs, inputs, bsinfo):
+#-------------------------------------------------------------------------------------------------------
+def get_sweep_indexes(radar: pyart.core.radar.Radar,
+                       vel_dt: datetime, 
+) -> tuple[int, int]:
+    """
+    Use the velocity sweep datetime to determine the sweeps of the other
+    fields in the pyart object. Works for split-cut or normal NEXRAD VCPs.
+    Args:
+        radar: pyart radar object with every field
+        vel_dt: datetime of the desired velocity sweep. 
+    Returns:
+        z_idx: index of the Z fields
+        v_idx: index of the V fields 
+    """
+
+    # 1. Find all tilts near 0.5 degrees
+    idx05 = np.where(np.abs(radar.fixed_angle['data'] - 0.5) < 0.2)[0]
+    all_times = pyart.util.datetimes_from_radar(radar)
+    
+    # 2. Map every 0.5 tilt to its Nyquist value
+    sweep_nyquists = {}
+    for i in idx05:
+        ray_idx = radar.sweep_start_ray_index['data'][i]
+        sweep_nyquists[i] = radar.instrument_parameters['nyquist_velocity']['data'][ray_idx]
+
+    # 3. Find the Doppler candidate (Anchor) closest to vel_dt
+    # We define 'Doppler-capable' as any sweep that isn't the 'low-nyquist' partner
+    # Logic: if there are two sweeps close in time, the one with the higher Nyquist is V
+    time_diffs = []
+    for i in idx05:
+        start_idx = radar.sweep_start_ray_index['data'][i]
+        diff = abs((all_times[start_idx] - vel_dt).total_seconds())
+        time_diffs.append(diff)
+    
+    # This is the sweep that matches your timestamp
+    v_idx = idx05[np.argmin(time_diffs)]
+    
+    # 4. Now find the BEST Reflectivity partner for this specific v_idx
+    # Check if there is a sweep close by with a LOWER Nyquist
+    v_time = all_times[radar.sweep_start_ray_index['data'][v_idx]]
+    v_nyq = sweep_nyquists[v_idx]
+    
+    z_idx = v_idx # Default to same sweep (Non-split cut)
+    
+    for i in idx05:
+        if i == v_idx: continue
+        i_time = all_times[radar.sweep_start_ray_index['data'][i]]
+        i_nyq = sweep_nyquists[i]
+        
+        # If this other sweep is within 30 seconds AND has a lower Nyquist,
+        # it is the high-sensitivity Surveillance cut we want for Z.
+        if abs((v_time - i_time).total_seconds()) < 30 and i_nyq < (v_nyq - 2.0):
+            z_idx = i
+            break
+
+    return z_idx, v_idx
+#-------------------------------------------------------------------------------------------------------
+def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
     
     # Variable Mapping
     field_mapping = {
@@ -55,76 +114,31 @@ def get_sector_data(radar, lat, lon, timestamp, hs, inputs, bsinfo):
     model_inputs = {}
     plot_dict = {}
 
-    # We'll use the 'Velocity' sweep as the master for coordinate/mask shapes
-#    v_sweep_idx = field_to_sweep.get('velocity', idx05[0])
-#    v_sweep = radar.extract_sweeps([v_sweep_idx])
-
     # Now perform dealiasing
     t0=time.time()
-    d_vel, radar_sweep = rad_utils.dealias_velocity_pyart(
-                                   raddt=timestamp,
-                                   radar=radar,
-                                   tilt=0.5
+    d_vel, radar_with_dvel = rad_utils.dealias_velocity_pyart(
+                         raddt=raddt,
+                         radar=radar,
+                         tilt=0.5
     )
     secs = time.time()-t0
     print(f"Dealasing took {secs:.2f} seconds.")
+    
+    # Find the Surveillance sweep that belongs with it
+    # In NEXRAD Split-Cut, Surveillance (Z) usually immediately precedes Doppler (V)
+    z_idx, v_idx = get_sweep_indexes(radar, raddt)
+    
+    field_to_sweep = {
+        'reflectivity': z_idx,
+        'cross_correlation_ratio': z_idx,
+        'differential_reflectivity': z_idx,
+        'velocity': v_idx,
+        'dealiased_velocity': v_idx,
+        'spectrum_width': v_idx,
+    }    
 
-    # Create a full-volume mask filled with the radar's default fill value
-    # This matches the (11160, 1832) shape required by the radar object
-    full_volume_shape = radar.fields['velocity']['data'].shape
-    d_vel_full = np.ma.masked_all(full_volume_shape)
-
-    # Identify which rays in the volume belong to the 0.5 deg sweep
-    # NEXRAD often has multiple 0.5 tilts; we'll find the one that matches 'velocity'
-    # We look for the sweep index where the fixed_angle is ~0.5 AND it has velocity data
-    vel_sweeps = [i for i, swp in enumerate(radar.sweep_number['data']) 
-                  if np.abs(radar.fixed_angle['data'][i] - 0.5) < 0.1 
-                  and 'velocity' in radar.extract_sweeps([i]).fields]
-
-    # Identify tilts
-    tilts = radar.fixed_angle['data']
-    idx05 = np.where(np.abs(tilts - 0.5) < 0.1)[0]
-
-    # Filter for the one that actually contains Doppler data
-    # We check 'velocity' and ensure it's not mostly empty
-    vel_sweeps = []
-    for i in idx05:
-        swp = radar.extract_sweeps([i])
-        if 'velocity' in swp.fields:
-            # Check if it has actual data (not just masked)
-            if np.ma.count(swp.fields['velocity']['data']) > 0:
-                vel_sweeps.append(i)
-
-    # Add the de-aliased field back to the radar object
-    if vel_sweeps:
-        target_swp_idx = vel_sweeps[0]
-        start_ray = radar.sweep_start_ray_index['data'][target_swp_idx]
-        end_ray = radar.sweep_end_ray_index['data'][target_swp_idx]
-        
-        # Insert the dealiased sweep data into the correct rows of the volume
-        d_vel_full[start_ray : end_ray + 1, :] = d_vel
-        
-        # Add to the RADAR object. extract_sweeps will now "see" this field.
-        radar.add_field_like('velocity', 'dealiased_velocity', d_vel_full, replace_existing=True)
-    else:
-        raise ValueError("Could not find a 0.5 degree sweep containing velocity.")
-
-    # We will use this to find which sweep contains which field
-    field_to_sweep = {}
-    for i in idx05:
-        swp_fields = radar.extract_sweeps([i]).fields.keys()
-        for f in swp_fields:
-            # Prefer sweeps with more data for that field
-            if f not in field_to_sweep:
-                field_to_sweep[f] = i
-            else:
-                current_cnt = np.ma.count(radar.extract_sweeps([field_to_sweep[f]]).fields[f]['data'])
-                new_cnt = np.ma.count(radar.extract_sweeps([i]).fields[f]['data'])
-                if new_cnt > current_cnt:
-                    field_to_sweep[f] = i
-
-     
-    v_sweep = radar.extract_sweeps([field_to_sweep['velocity']])
+    # Used for range, range_folded_mask, etc. 
+    v_sweep = radar.extract_sweeps([v_idx])
     v_az_idx, v_gate_idx, _, _ = rad_utils.get_azimuth_range_from_pyart(lat, lon, v_sweep)
 
     # Process each group in 'inputs'
@@ -135,7 +149,7 @@ def get_sector_data(radar, lat, lon, timestamp, hs, inputs, bsinfo):
             # A. Special Channels (Masks/Range)
             if varname in ['range', 'range_inv', 'range_folded_mask', 'out_of_range_mask']:
                 # Calculate these relative to the Velocity sweep coordinates
-                v_patch = v_sweep.fields['velocity']['data'].data
+                v_patch = v_sweep.fields['velocity']['data'] #.data
                 v_az_inds = np.arange(v_az_idx - hs[0], v_az_idx + hs[0]) % v_patch.shape[0]
                 v_rng_slice = slice(v_gate_idx - hs[1], v_gate_idx + hs[1])
                 local_v_patch = v_patch[v_az_inds, v_rng_slice]
@@ -156,23 +170,31 @@ def get_sector_data(radar, lat, lon, timestamp, hs, inputs, bsinfo):
             
             # B. Standard Radar Fields
             else:
-                py_f = field_mapping.get(varname, varname.lower())
-                target_sweep_idx = field_to_sweep.get(py_f, idx05[0])
+                py_f = field_mapping[varname]
+                target_sweep_idx = field_to_sweep[py_f]
                 target_sweep = radar.extract_sweeps([target_sweep_idx])
-                
+ 
                 # CRITICAL: Re-calculate indices for THIS specific sweep
                 local_az_idx, local_gate_idx, _, _ = rad_utils.get_azimuth_range_from_pyart(lat, lon, target_sweep)
-                
-                local_az_inds = np.arange(local_az_idx - hs[0], local_az_idx + hs[0]) % target_sweep.azimuth['data'].shape[0]
+
+                # Get the patch
+                n_rays = target_sweep.azimuth['data'].shape[0]
+                local_az_inds = np.arange(local_az_idx - hs[0], local_az_idx + hs[0]) % n_rays
                 local_rng_slice = slice(local_gate_idx - hs[1], local_gate_idx + hs[1])
 
                 raw_patch = target_sweep.fields[py_f]['data'][local_az_inds, local_rng_slice]
-
+                
                  # Get the mask, because the dealiasing removed it for velocity
-                if py_f == 'dealiased_velocity':
-                    ref_mask = target_sweep.fields['reflectivity']['data'].mask[local_az_inds, local_rng_slice]
-                    # Force the velocity to be masked where reflectivity is masked
-                    raw_patch = np.ma.masked_array(raw_patch, mask=ref_mask)
+               # if py_f == 'dealiased_velocity':
+               #     #ref_mask = target_sweep.fields['reflectivity']['data'].mask[local_az_inds, local_rng_slice]
+               #     # Force the velocity to be masked where reflectivity is masked
+               #     raw_patch = d_vel[local_az_inds, local_rng_slice]
+               #     plt.imshow(d_vel)
+               #     plt.show()
+               #     plt.close()
+               #     plt.imshow(raw_patch)
+               #     plt.show(); sys.exit()
+               #     raw_patch = np.ma.masked_array(raw_patch, mask=ref_mask)
 
                 clean_patch = np.ma.filled(raw_patch, fill_value=-99900.0)
                 
@@ -189,11 +211,14 @@ def get_sector_data(radar, lat, lon, timestamp, hs, inputs, bsinfo):
                 vmin, vmax = bsinfo[varname]['vmin'], bsinfo[varname]['vmax']
                 if varname == 'Velocity':
                     data_patch = np.clip(clean_patch / max(abs(vmin), abs(vmax)), -1, 1)
-#                    pickle.dump(data_patch, open('velocity_pyart.pkl','wb'))
+                    pickle.dump(data_patch, open('velocity_pyart.pkl','wb'))
                 else:
                     data_patch = np.clip((clean_patch - vmin) / (vmax - vmin), 0, 1)
                     if varname=='Reflectivity':
                         pickle.dump(data_patch, open('ref_pyart.pkl', 'wb'))
+               
+                #plt.imshow(clean_patch)
+                #plt.show()
             #data_patch = np.flipud(np.fliplr(data_patch))
             #print(varname)
             #plt.imshow(data_patch)

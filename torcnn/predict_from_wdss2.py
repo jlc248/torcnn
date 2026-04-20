@@ -138,7 +138,9 @@ def create_tensor(rad_file: str,
                 if varname == 'Velocity':
                     range_folded_value = radds.attrs.get('RangeFolded', -99901.0)
                     container['range_folded_mask'] = (rad_sector == range_folded_value).astype(np.float32)
-                    pickle.dump(rad_sector_scaled, open('velocity_wdss2.pkl','wb'))
+               #     pickle.dump(rad_sector_scaled, open('velocity_wdss2.pkl','wb'))
+               # elif varname == 'Reflectivity':
+               #     pickle.dump(rad_sector_scaled, open('ref_wdss2.pkl','wb'))
 
                 if X is None:
                     X = np.expand_dims(rad_sector_scaled, axis=(0,-1))

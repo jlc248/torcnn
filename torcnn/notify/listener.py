@@ -7,7 +7,9 @@ import fnmatch
 
 # The pattern you are looking for
 # This matches: any_path/Kxxx/TORPcsvShort/QC/any_file
-PATTERN = "*/K???/TORPcsvShort/QC/*"
+
+#PATTERN = "*/K???/TORPcsvShort/QC/*"
+PATTERN = "*/K???/TORPcsvShort/*"
 
 class RadarHandler(FileSystemEventHandler):
     def on_closed(self, event):

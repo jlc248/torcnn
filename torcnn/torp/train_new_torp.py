@@ -9,6 +9,7 @@ from sklearn.impute import SimpleImputer
 from torp_dataset import TORPDataset2
 import pickle
 import io
+import glob
 
 def check_conditions(s):
     """
@@ -109,8 +110,8 @@ def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
     # get only storms within 100km and 1hr here?
 
     # Parse out the data we want
-    train = ds[ds['Time'] < '20190101']
-    val = ds[ds['Time'].str.startswith('2019')]
+    train = ds[(ds['Time'] < '20180101') | (ds['Time'] > '20181231')]
+    val = ds[ds['Time'].str.startswith('2018')]
     #train = ds[ds.year < 2019].copy()
     #val = ds[ds.year == 2019].copy()
 
@@ -229,16 +230,24 @@ def main():
     #)
     #ds_orig = dataset.load_dataframe()
 
-    dataset = TORPDataset2(dirpath='/work2/jcintineo/TORP/',
-                           years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019],
-                           dataset_type='WarningReportPreTornadoInfo'
-    )
-    ds_orig = dataset.load_dataframe()
+    #dataset = TORPDataset2(dirpath='/work2/jcintineo/TORP/',
+    #                       years=[2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019],
+    #                       dataset_type='WarningReportPreTornadoInfo'
+    #)
+    #ds_orig = dataset.load_dataframe()
+   
+    # Concatenate DataFrames
+    files = glob.glob('/work2/jcintineo/TORP//combined_torp_rep_pretor/201?_combined*csv')
+    df_list = [pd.read_csv(f) for f in files]
     
+    ds_orig = pd.concat(df_list, ignore_index=True) 
+    # Drop spouts
+    ds_orig = ds_orig[ds_orig.spout == 0]
+
     target = "tornado"
 
     # Run the training pipeline 
     train_and_save_model(ds_orig, target, args.output_dir, args.n_jobs)
 
 if __name__ == "__main__":
-    main()
+     main()
