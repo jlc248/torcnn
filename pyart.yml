@@ -36,3 +36,4 @@ dependencies:
   - mysql.connector
   - satpy
   - geopy
+  - opencv-python

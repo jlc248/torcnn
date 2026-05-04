@@ -65,6 +65,6 @@ def parallel_repair(input_pattern, output_dir, max_workers=20):
         list(tqdm(executor.map(worker_func, shards), total=len(shards)))
 
 
-input_pattern = "/work2/jcintineo/torcnn/tfrecs_combined/2018??/*/*tfrec"
+input_pattern = "/work2/jcintineo/torcnn/tfrecs_combined/201[1-7]??/*/*tfrec"
 output_dir = "/work2/jcintineo/torcnn/tfrecs_TMP" 
-parallel_repair(input_pattern, output_dir, max_workers=20)
+parallel_repair(input_pattern, output_dir, max_workers=40)

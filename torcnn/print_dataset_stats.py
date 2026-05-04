@@ -5,10 +5,10 @@ import pickle
 import sys
 
 def stats(dd):
-    total = dd['tor'] + dd['hail'] + dd['wind'] + dd['nonsev'] + dd['pretor_15'] + dd['pretor_30'] + dd['pretor_45'] + dd['pretor_60']
+    total = dd['tornado'] + dd['hail'] + dd['wind'] + dd['nonsev'] + dd['pretor_15'] + dd['pretor_30'] + dd['pretor_45'] + dd['pretor_60']
     p_hail = np.round(dd['hail']/total,3)
     p_wind = np.round(dd['wind']/total,3)
-    p_tor = np.round(dd['tor']/total,3)
+    p_tor = np.round(dd['tornado']/total,3)
     p_nonsev = np.round(dd['nonsev']/total,3)
     p_pretor15 = np.round(dd['pretor_15']/total,3)
     p_pretor30 = np.round(dd['pretor_30']/total,3)
@@ -16,7 +16,7 @@ def stats(dd):
     p_pretor60 = np.round(dd['pretor_60']/total,3)
     return total, p_hail, p_wind, p_tor, p_nonsev, p_pretor15, p_pretor30, p_pretor45, p_pretor60
 
-f=pickle.load(open('sample_counts.pickle','rb'))
+f=pickle.load(open('sample_counts_combined.pickle','rb'))
 years=np.sort(np.array(list(f.keys())))
 total_totals = total_tor = total_hail = total_wind = total_nonsev = total_pretor = 0
 for y in years:
@@ -29,14 +29,14 @@ for y in years:
     total_pretor += (pretor15 + pretor30 + pretor45 + pretor60)*total
     print(y)
     print('total samples:', total)
-    print('%tor:', tor*100)
+    print('%tornado:', tor*100)
     print('%pretor:',(pretor15 + pretor30 + pretor45 + pretor60)*100)
     print('%hail:',hail*100)
     print('%wind:',wind*100)
     print('%nonsev:',nonsev*100)
     print('')
 print('TOTAL')
-print('tor:',int(total_tor), np.round(100*int(total_tor)/total_totals,1),'%')
+print('tornado:',int(total_tor), np.round(100*int(total_tor)/total_totals,1),'%')
 print('pretor:', int(total_pretor), np.round(100*int(total_pretor)/total_totals,1),'%')
 print('hail:', int(total_hail), np.round(100*int(total_hail)/total_totals,1),'%')
 print('wind:', int(total_wind), np.round(100*int(total_wind)/total_totals,1),'%')

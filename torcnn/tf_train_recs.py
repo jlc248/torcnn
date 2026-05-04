@@ -216,16 +216,16 @@ def parse_and_prepare(example_proto):
     # Start with default weight
     sample_weight = tf.cast(1, tf.float32)
    
-    sample_weight = tf.where( (minutes >= 1) & (minutes <= 10), 10.0, sample_weight)
-    sample_weight = tf.where( (minutes >= 11) & (minutes <= 20), 5.0, sample_weight)
-    sample_weight = tf.where( (minutes >= 21), 2.0, sample_weight)
+    sample_weight = tf.where( (minutes >= 1) & (minutes <= 10), 25.0, sample_weight)
+    sample_weight = tf.where( (minutes >= 11) & (minutes <= 20), 15.0, sample_weight)
+    sample_weight = tf.where( (minutes >= 21), 5.0, sample_weight)
 
     is_sw_one = tf.equal(sample_weight, 1) 
     # If sample_weight is still 1,
     # apply tornado mag weights (prioritized)
-    sample_weight = tf.where(is_sw_one & (mag >= 4), 50.0, sample_weight)
-    sample_weight = tf.where(is_sw_one & (mag == 3), 20.0, sample_weight)
-    sample_weight = tf.where(is_sw_one & (mag == 2), 10.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag >= 4), 5.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag == 3), 5.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag == 2), 5.0, sample_weight)
     sample_weight = tf.where(is_sw_one & (mag == 1), 5.0, sample_weight)
     sample_weight = tf.where(is_sw_one & (mag == 0), 2.0, sample_weight)
     # Final fallback for any tornado

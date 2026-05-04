@@ -39,6 +39,13 @@ parser.add_argument(
     default=[],
 )
 parser.add_argument(
+    "-sd",
+    "--save_data",
+    help="Save the predictions, labels, and subclass information to a dataframe. \
+         Default is to just save the metrics (model.evalute).",
+    action="store_true",
+)
+parser.add_argument(
     "--mask",
     help="Set this to mask predictions.",
     action="store_true"
@@ -200,94 +207,6 @@ def get_metrics():
     return custom_metrics, metrics
 
 # ----------------------------------------------------------------------------------------------------------------
-def parse_tfrecord_fn(example):
-
-    feature_description = {}
-
-    # Define the target features
-    for target in TARGETS:
-        feature_description[target] = tf.io.FixedLenFeature([1], tf.int64)
-
-    # Define scalar predictor features
-    for scalar_var in SCALAR_VARS:
-        feature_description[scalar_var] = tf.io.FixedLenFeature([1], tf.float32)
-
-    # Define the n-D predictor features
-    for inp in INPUTS:
-        for chan in inp:
-            if chan != 'range_inv':
-                feature_description[chan] =  tf.io.FixedLenFeature([], tf.string)
-
-    # Parse the single example
-    features = tf.io.parse_single_example(example, feature_description)
-
-    # Reshape the n-D inputs
-    for inp in INPUTS:
-        for chan in inp:
-            if chan == 'range':
-                features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[1],1])
-            elif chan == 'range_inv':
-                # tf.identity copies the tensor ('range' must be before 'range_inv' in input_tuples[x])
-                features[chan] = tf.identity(features['range'])
-            else:
-                features[chan] = tf.reshape(tf.io.parse_tensor(features[chan], tf.uint8), [PS[0], PS[1],1])
-
-    return features
-
-#---------------------------------------------------------------------------------------------------------------
-def prepare_sample(features):
-
-    # binarize targets and create sample_weight or mask
-    for ii, target in enumerate(TARGETS):
-        targetTmp = features[target]
-        if ii == 0:
-            targetInt = targetTmp
-        else:
-            targetInt = tf.stack([targetInt, targetTmp])
-
-
-    inputs = {}
-
-    # These Inputs are already byte-scaled
-    for ii,inp in enumerate(INPUTS):  #for each keras.Input in the model construction
-        for chIdx, varname in enumerate(inp):             #for each channel in the tf.layers.Input
-
-            data = tf.cast(features[varname], tf.float32)
-
-            # Handle the coordinate features
-            # Duplicate the 1D range vector (and range_inv) n_azimuths times
-            if varname == 'range':
-                data = tf.repeat(tf.expand_dims(data, axis=0), repeats=PS[0], axis=0)
-            elif varname == 'range_inv':
-                data = tf.repeat(tf.expand_dims(1.0 / data, axis=0), repeats=PS[0], axis=0)
-
-
-            if chIdx == 0:
-                tensor = data
-            else:
-                tensor = tf.concat([tensor, data], axis=2)
-
-        if ii == 0:
-            inputs['radar'] = tensor
-        elif ii == 1:
-            inputs['coords'] = tensor
-
-
-    if SCALAR_VARS:
-        # These need to be normalized/scaled
-        for idx,scalar_var in enumerate(SCALAR_VARS):
-            scalarTmp = tf_bytescale(features[scalar_var], BSINFO[scalar_var]['vmin'], BSINFO[scalar_var]['vmax'])
-            if idx == 0:
-                scalars = scalarTmp
-            else:
-                scalars = tf.stack([scalars, scalarTmp])
-        # Using ii from block above
-        inputs['scalars'] = scalars
-
-    # Sample weight should be same shape as targetInt
-    return inputs, targetInt #, sample_weight
-
-#---------------------------------------------------------------------------------------------------------------
 def normalize_channel(tensor, channel_name):
     info = BSINFO[channel_name]
     c_min = info['vmin']
@@ -330,8 +249,11 @@ for inp in INPUTS:
     for chan in inp:
         if chan != 'range_inv':
             feature_description[chan] = tf.io.FixedLenFeature([], tf.string)
-
-def parse_and_prepare(example_proto):
+if args.save_data:
+    feature_description['pretorMinutes'] = tf.io.FixedLenFeature([], tf.int64)
+    feature_description['magtornado'] = tf.io.FixedLenFeature([], tf.int64)
+#---------------------------------------------------------------------------------------------------------------
+def parse_and_prepare(example_proto, save_data=False):
 
     # Parse the record
     features = tf.io.parse_single_example(example_proto, feature_description)
@@ -392,8 +314,14 @@ def parse_and_prepare(example_proto):
             scalar_list.append(val)
         processed_inputs['scalars'] = tf.stack(scalar_list)
 
-    return processed_inputs, targetInt
+    if save_data:
+        pretorMinutes = features['pretorMinutes']
+        magtornado = features['magtornado']
+        return processed_inputs, targetInt, pretorMinutes, magtornado
+    else:
+        return processed_inputs, targetInt
 
+#---------------------------------------------------------------------------------------------------------------
 ################################################################################################################
 ################################################################################################################
 
@@ -432,7 +360,7 @@ else:
     year = "2018"
     inroot = f"/work2/jcintineo/torcnn/tfrecs_combined/{year}*/"
     # subdirs: nontor, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
-    subglobs = ["tornado", "wind", "hail", "nonsev", "pretor_15", "pretor_30"]
+    subglobs = ["wind", "hail", "nonsev", "pretor_15", "pretor_30"]
     
     # leave these empty if you only want one run
     #month_subdirs = ['01-02','03','04','05','06','07','08','09','10','11-12']
@@ -491,11 +419,20 @@ except AssertionError:
 test_ds = tf.data.TFRecordDataset(test_filenames, num_parallel_reads=AUTOTUNE)
 
 # Already handles the remainder since drop_remainder=False by default
-test_ds = (
-    test_ds.map(parse_and_prepare, num_parallel_calls=AUTOTUNE)
-    .batch(batchsize)  # Don't batch if making numpy arrays
-    .prefetch(AUTOTUNE)
-)
+if args.save_data:
+    test_ds = (
+        test_ds.map(lambda x: parse_and_prepare(x, save_data=args.save_data), num_parallel_calls=AUTOTUNE)
+        .batch(batchsize)  # Don't batch if making numpy arrays
+        .prefetch(AUTOTUNE)
+    )
+    features_ds = test_ds.map(lambda x, y, pt, mag: x)
+    
+else:
+    test_ds = (
+        test_ds.map(lambda x: parse_and_prepare(x, save_data=args.save_data), num_parallel_calls=AUTOTUNE)
+        .batch(batchsize)  # Don't batch if making numpy arrays
+        .prefetch(AUTOTUNE)
+    )
 
 # Disable AutoShard.
 options = tf.data.Options()
@@ -518,30 +455,57 @@ if filelist:
     print(len(all_preds), len(all_labels)) 
 else:
     # Perform eval
-    eval_results = conv_model.evaluate(test_ds)
 
-    cter = 0
-    dict_results = collections.OrderedDict(
-        {
-            "n_gpu": ngpu,
-            "batch_size": batchsize,
-            "n_samples": n_samples,
-            "val_lists": val_lists,
-        }
-    )
-
-    for key in custom_objs:
-        dict_results[key] = np.round(eval_results[cter], 5)
-        cter += 1
-
-    # Append outsubdir, if necessary
-    if month_subdirs:
-        final_outdir = f"{outdir}/month{month_subdirs[ii]}"
-    elif hour_subdirs:
-        final_outdir = f"{outdir}/hour{hour_subdirs[ii]}"
+    if args.save_data:
+        # The model only sees the features (x)
+        all_preds = conv_model.predict(features_ds, verbose=1)
+        # Here we ignore the features (_) and grab the labels (y) and other info
+        all_tornado = []
+        all_pretorMinutes = []
+        all_magtornado = []
+        for _, y, z, a in test_ds.as_numpy_iterator():
+            all_tornado.append(y)
+            all_pretorMinutes.append(z)
+            all_magtornado.append(a)
+        # Convert lists of lists into single lists
+        all_tornado = [item[0] for sublist in all_tornado for item in sublist]
+        all_pretorMinutes = [item for sublist in all_pretorMinutes for item in sublist]
+        all_magtornado = [item for sublist in all_magtornado for item in sublist]
+        results_df = pd.DataFrame({
+            'prob': all_preds.squeeze(),
+            'tornado': all_tornado,
+            'pretorMinutes': all_pretorMinutes,
+            'magtornado': all_magtornado,
+        })
+        os.makedirs(outdir, exist_ok=True)
+        results_df.to_csv(f"{outdir}/eval_data.csv", index=False)
+        print(f"Saved {outdir}/eval_data.csv")
     else:
-        final_outdir = outdir
 
-    os.makedirs(final_outdir, exist_ok=True)
-    pickle.dump(dict_results, open(f"{final_outdir}/eval_results.pkl", "wb"))
-    print(f"Saved {final_outdir}/eval_results.pkl")
+        eval_results = conv_model.evaluate(test_ds)
+    
+        cter = 0
+        dict_results = collections.OrderedDict(
+            {
+                "n_gpu": ngpu,
+                "batch_size": batchsize,
+                "n_samples": n_samples,
+                "val_lists": val_lists,
+            }
+        )
+    
+        for key in custom_objs:
+            dict_results[key] = np.round(eval_results[cter], 5)
+            cter += 1
+    
+        # Append outsubdir, if necessary
+        if month_subdirs:
+            final_outdir = f"{outdir}/month{month_subdirs[ii]}"
+        elif hour_subdirs:
+            final_outdir = f"{outdir}/hour{hour_subdirs[ii]}"
+        else:
+            final_outdir = outdir
+    
+        os.makedirs(final_outdir, exist_ok=True)
+        pickle.dump(dict_results, open(f"{final_outdir}/eval_results.pkl", "wb"))
+        print(f"Saved {final_outdir}/eval_results.pkl")

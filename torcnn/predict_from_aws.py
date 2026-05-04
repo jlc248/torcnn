@@ -1,4 +1,6 @@
 import os, sys
+#os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import time
 import s3fs
 import pyart
@@ -9,13 +11,10 @@ import pickle
 import logging
 import matplotlib.pyplot as plt
 from datetime import datetime
-from geopy.distance import geodesic
-from geopy.point import Point
-from netCDF4 import num2date
-import bisect
-
-# Assuming these are imported from your rad_utils.py
 import rad_utils 
+import shap
+
+import tensorflow as tf
 
 logger = logging.getLogger(__name__)
 
@@ -232,18 +231,97 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
 
     return model_inputs, plot_dict
 
+#---------------------------------------------------------------------------------------------------------
+def plot_shap_maps(shap_values, input_tensor, channel_names, out_path, only_top_two=False):
+    """
+    Plots the spatial distribution of SHAP values for each radar channel.
+    """
+    # shap_values[0] corresponds to the 'radar' input [batch, H, W, Channels]
+    # We take [0] for the first (and only) sample in the batch
+    sv = shap_values[0][0] 
+    img = input_tensor['radar'][0]
+    
+    n_channels = sv.shape[-1]
+    
+    # Calculate global importance per channel to find "Top Two"
+    # We use mean absolute SHAP value as the importance metric
+    importance = [np.abs(sv[:, :, i]).mean() for i in range(n_channels)]
+    indices = np.argsort(importance)[::-1] # Sort descending
+    
+    if only_top_two:
+        indices = indices[:2]
+        n_plots = 2
+    else:
+        n_plots = n_channels
+
+    fig, axes = plt.subplots(1, n_plots, figsize=(n_plots * 5, 5), squeeze=False)
+    
+    for i, idx in enumerate(indices):
+        ax = axes[0, i]
+        # Calculate a symmetric vmin/vmax for the SHAP heatmap
+        vmax = np.max(np.abs(sv[:, :, idx]))
+        
+        # Plot the SHAP values as a heatmap
+        im = ax.imshow(sv[:, :, idx], cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+        
+        # Optional: Overlay a contour of the original data (e.g., Reflectivity) 
+        # to provide context if the channel is recognizable
+        ax.set_title(f"{channel_names[idx]}\nMean |SHAP|: {importance[idx]:.4f}")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        ax.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close()
+
+#---------------------------------------------------------------------------------------------------------
+def get_integrated_gradients(model, input_tensor, baseline=None, steps=50):
+    """
+    Calculates Integrated Gradients for a pixel-by-pixel importance map.
+    """
+    if baseline is None:
+        baseline = np.zeros_like(input_tensor)
+
+    # 1. Create interpolated images between baseline and input
+    alphas = np.linspace(0, 1, steps)
+    # Shape: (steps, H, W, C)
+    interpolated = baseline + alphas[:, np.newaxis, np.newaxis, np.newaxis] * (input_tensor - baseline)
+    interpolated = tf.cast(interpolated, tf.float32)
+
+    # 2. Calculate gradients for all interpolated images
+    with tf.GradientTape() as tape:
+        tape.watch(interpolated)
+        predictions = model(interpolated)
+        # We want the gradient of the tornado probability
+        # If your model has one output, predictions is [steps, 1]
+    
+    grads = tape.gradient(predictions, interpolated)
+
+    # 3. Average the gradients and multiply by (input - baseline)
+    avg_grads = tf.reduce_mean(grads, axis=0)
+    integrated_grad = (input_tensor[0] - baseline[0]) * avg_grads
+    
+    return integrated_grad.numpy()
+#---------------------------------------------------------------------------------------------------------
 # --- MAIN PIPELINE ---
 
-def process_events(event_list, model_path, config_path, out_dir):
+def process_events(event_list, model_path, config_path, out_dir, run_shap=False, top_two_only=False):
     # Load Model & Config
     conv_model = keras.models.load_model(model_path, compile=False)
     config = pickle.load(open(config_path, 'rb'))
     bsinfo = config['byte_scaling_vals']
     inputs = config['inputs']
+    channel_names = config['channels']
     ps = config['ps']
     hs = (ps[0]//2, ps[1]//2)
     
     os.makedirs(out_dir, exist_ok=True)
+
+    # --- Initialize SHAP Explainer ---
+    # We use a small background of zeros or a representative sample. 
+    # Since radar data is normalized, zeros often represent "no signal".
+    background = np.zeros((1, ps[0], ps[1], len(channel_names)))
+    explainer = shap.GradientExplainer(conv_model, background)
 
     for event in event_list:
      
@@ -255,15 +333,63 @@ def process_events(event_list, model_path, config_path, out_dir):
                 # Load the WHOLE radar object
                 radar = pyart.io.read_nexrad_archive(f)
 
-            # 1. Extract Scaled Tensor and Unscaled Plot Data
+            # Extract Scaled Tensor and Unscaled Plot Data
             tensors, plot_data = get_sector_data(radar, event['lat'], event['lon'], event['time'], hs, inputs, bsinfo)
             if tensors is None: continue
            
-            # 2. Run Prediction
+            # Run Prediction
             preds = conv_model.predict(tensors, verbose=0)
             prob = np.squeeze(preds)
-           
-            # 3. Create the Plot
+            print(prob);sys.exit() 
+            # Generate SHAP values
+            if run_shap:
+               # SHAP Explainer needs a function that takes a numpy array and returns a prediction
+               # def f(x):
+               #     # Ensure the input is float32 for the model
+               #     return conv_model.predict(x.astype(np.float32), verbose=0)
+
+               # # Define the Masker
+               # ## This tells SHAP how to "hide" pixels. We'll use a "blur" 
+               # ## approach which is often better for spatial features than just solid black.
+               # ## You can also use: masker = shap.maskers.Image("zeros", shape=tensors['radar'][0].shape)
+               # masker = shap.maskers.Image("blur(10,10)", shape=tensors['radar'][0].shape)
+
+               # # Create the Explainer
+               # explainer = shap.Explainer(f, masker)               
+
+               # # Calculate SHAP values
+               # # max_evals: higher = better quality but slower. 500 is a good starting point.
+               # # batch_size: increase this if you have a good GPU to speed up the process.
+               # shap_results = explainer(tensors['radar'], max_evals=5000, batch_size=512)
+
+               # shap_map_data = shap_results.values[0][...,0]
+
+               # plt.imshow(shap_map_data[...,0])
+
+                ig_map = get_integrated_gradients(conv_model, tensors['radar'], steps=50)
+                vmax = ig_map[...,1].max() * 0.75
+                vmin = vmax*-1
+                plt.imshow(ig_map[...,1], vmin=vmin, vmax=vmax, cmap='RdBu_r')
+                plt.show()
+                
+                # Using GradientExplainer
+                ## Background (10-20 samples of zeros is standard)
+                #background = np.zeros((10, 128, 256, 7))
+
+                #explainer = shap.GradientExplainer(bda x: conv_model(x)), background)
+
+                ## Explain (This will give you a 128x256 result immediately)
+                #shap_values = explainer.shap_values(tensors['radar'])               
+ 
+                #plt.imshow(shap_values[0,...,0])
+                #plt.show()
+                sys.exit()
+
+                shap_fname = f"{out_dir}/SHAP_{event['radar']}_{event['time'].strftime('%Y%m%d_%H%M%S')}.png"
+                plot_shap_maps(shap_values, tensors, channel_names, shap_fname, only_top_two=top_two_only)
+                logger.info(f"Saved SHAP plot to {shap_fname}")
+
+            # Create the Plot
             plot_channels = ['Reflectivity', 'Velocity', 'RhoHV', 'SpectrumWidth']
             fig = plt.figure(figsize=(7, 6))
             
@@ -312,5 +438,7 @@ if __name__ == "__main__":
         my_events, 
         model_path=f'{model_dir}/fit_conv_model.keras',
         config_path=f'{model_dir}/model_config.pkl',
-        out_dir='./tornado_plots'
+        out_dir='./tornado_plots',
+        run_shap=True,
+        top_two_only=True,
     )
