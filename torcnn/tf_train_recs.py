@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
 import matplotlib
 #matplotlib.use('Agg')
 import os
@@ -34,9 +32,9 @@ import logging
 import logging_def
 #from LRFinder import LRFinder
 
-#gpus = tf.config.list_physical_devices('GPU')
-#for gpu in gpus:
-#  tf.config.experimental.set_memory_growth(gpu, True)
+gpus = tf.config.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-m','--model',help="import this trained CNN model",type=str)
@@ -149,6 +147,9 @@ for inp in INPUTS:
     for chan in inp:
         if chan != 'range_inv':
             feature_description[chan] = tf.io.FixedLenFeature([], tf.string)
+# For sample_weight
+feature_description['pretorMinutes'] = tf.io.FixedLenFeature([], tf.int64)
+feature_description['magtornado'] = tf.io.FixedLenFeature([], tf.int64)
 
 def parse_and_prepare(example_proto):
 
@@ -207,7 +208,31 @@ def parse_and_prepare(example_proto):
             scalar_list.append(val)
         processed_inputs['scalars'] = tf.stack(scalar_list)
 
-    return processed_inputs, targetInt
+
+    # Sample weight
+    minutes = features['pretorMinutes']
+    mag = features['magtornado']
+    
+    # Start with default weight
+    sample_weight = tf.cast(1, tf.float32)
+   
+    sample_weight = tf.where( (minutes >= 1) & (minutes <= 10), 10.0, sample_weight)
+    sample_weight = tf.where( (minutes >= 11) & (minutes <= 20), 5.0, sample_weight)
+    sample_weight = tf.where( (minutes >= 21), 2.0, sample_weight)
+
+    is_sw_one = tf.equal(sample_weight, 1) 
+    # If sample_weight is still 1,
+    # apply tornado mag weights (prioritized)
+    sample_weight = tf.where(is_sw_one & (mag >= 4), 50.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag == 3), 20.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag == 2), 10.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag == 1), 5.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag == 0), 2.0, sample_weight)
+    # Final fallback for any tornado
+    is_sw_one = tf.equal(sample_weight, 1)
+    sample_weight = tf.where(is_sw_one & tf.equal(features['tornado'], 1), 2.0, sample_weight)
+
+    return processed_inputs, targetInt, sample_weight
 #################################################################################################################################
 def apply_augmentations(input_dict, target_img):
     """Apply data augmentations
@@ -399,7 +424,8 @@ neg_train_files = [f for f in all_train_files if not ('tornado' in f or 'pretor'
 print(f"Pos Shards: {len(pos_train_files)} | Neg Shards: {len(neg_train_files)}")
 print('steps_per_epoch:', config['steps_per_epoch'])
 
-train_ds = get_dataset(pos_train_files, neg_train_files, BATCHSIZE, training=True, pos_ratio=config['pos_ratio'])
+with tf.device('/cpu:0'):
+    train_ds = get_dataset(pos_train_files, neg_train_files, BATCHSIZE, training=True, pos_ratio=config['pos_ratio'])
 
 # For quick_looks or error-checking
 #for inputs,labels in train_ds:
@@ -426,7 +452,9 @@ for pattern in config['val_list']:
 
 pos_val_files = [f for f in all_val_files if 'tornado' in f or 'pretor' in f]
 neg_val_files = [f for f in all_val_files if not ('tornado' in f or 'pretor' in f)]
-val_ds = get_dataset(pos_val_files, neg_val_files, BATCHSIZE, training=False, pos_ratio=config['pos_ratio'])
+
+with tf.device('/cpu:0'):
+    val_ds = get_dataset(pos_val_files, neg_val_files, BATCHSIZE, training=False, pos_ratio=config['pos_ratio'])
 
 
 outdir = config['outdir']
@@ -474,7 +502,7 @@ if NGPU > 1:
             logging.info('Opening ' + args.model)
             metrics = tf_models.get_metrics(num_targets=ntargets)
             conv_model = load_model(args.model) #, custom_objects=CUSTOM_METRICS)
-            conv_model.compile(loss=conv_model.loss, optimizer=conv_model.optimizer, metrics=metrics)
+            conv_model.compile(loss=conv_model.loss, optimizer=conv_model.optimizer, weighted_metrics=metrics)
             print(conv_model.summary())
             initial_epoch = int(os.path.basename(args.model).split('-')[1])
         else:
@@ -486,7 +514,7 @@ else:
         logging.info('Opening ' + args.model)
         metrics = tf_models.get_metrics(num_targets=ntargets)
         conv_model = load_model(args.model) #, custom_objects=CUSTOM_METRICS)
-        conv_model.compile(loss=conv_model.loss, optimizer=conv_model.optimizer, metrics=metrics)
+        conv_model.compile(loss=conv_model.loss, optimizer=conv_model.optimizer, weighted_metrics=metrics)
         print(conv_model.summary())
         initial_epoch = int(os.path.basename(args.model).split('-')[1])
     else:

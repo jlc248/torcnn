@@ -354,7 +354,7 @@ def cnn(config):
     elif config['loss_fcn'] == 'binary_focal_crossentropy':
         # For gamma=2.0, if the model predicts 0.9, the loss for that sample is reduced by a factor of 100 (0.1)^2
         # If the model is unsure (p=0.5), the discount is much smaller
-        # Result: the model is forced to fucs its gradient updates on hard negatives and hard positives
+        # Result: the model is forced to focus its gradient updates on hard negatives and hard positives
         # Alpha is the "class balance" weight
         # As gamma increases, the optimal alpha usually decreases. 
         loss_fcn = keras.losses.BinaryFocalCrossentropy(gamma=2.0, alpha=0.25, label_smoothing=label_smoothing)
