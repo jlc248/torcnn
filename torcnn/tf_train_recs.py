@@ -150,6 +150,8 @@ for inp in INPUTS:
 # For sample_weight
 feature_description['pretorMinutes'] = tf.io.FixedLenFeature([], tf.int64)
 feature_description['magtornado'] = tf.io.FixedLenFeature([], tf.int64)
+feature_description['hail'] = tf.io.FixedLenFeature([], tf.int64)
+feature_description['wind'] = tf.io.FixedLenFeature([], tf.int64)
 
 def parse_and_prepare(example_proto):
 
@@ -216,21 +218,25 @@ def parse_and_prepare(example_proto):
     # Start with default weight
     sample_weight = tf.cast(1, tf.float32)
    
-    sample_weight = tf.where( (minutes >= 1) & (minutes <= 10), 25.0, sample_weight)
-    sample_weight = tf.where( (minutes >= 11) & (minutes <= 20), 15.0, sample_weight)
-    sample_weight = tf.where( (minutes >= 21), 5.0, sample_weight)
+    sample_weight = tf.where( (minutes >= 1) & (minutes <= 10), 10.0, sample_weight)
+    sample_weight = tf.where( (minutes >= 11) & (minutes <= 20), 5.0, sample_weight)
+    sample_weight = tf.where( (minutes >= 21), 2.0, sample_weight)
 
     is_sw_one = tf.equal(sample_weight, 1) 
     # If sample_weight is still 1,
     # apply tornado mag weights (prioritized)
     sample_weight = tf.where(is_sw_one & (mag >= 4), 5.0, sample_weight)
     sample_weight = tf.where(is_sw_one & (mag == 3), 5.0, sample_weight)
-    sample_weight = tf.where(is_sw_one & (mag == 2), 5.0, sample_weight)
-    sample_weight = tf.where(is_sw_one & (mag == 1), 5.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag == 2), 3.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & (mag == 1), 3.0, sample_weight)
     sample_weight = tf.where(is_sw_one & (mag == 0), 2.0, sample_weight)
     # Final fallback for any tornado
     is_sw_one = tf.equal(sample_weight, 1)
     sample_weight = tf.where(is_sw_one & tf.equal(features['tornado'], 1), 2.0, sample_weight)
+    # Hail and wind
+    is_sw_one = tf.equal(sample_weight, 1)
+    sample_weight = tf.where(is_sw_one & tf.equal(features['hail'], 1), 2.0, sample_weight)
+    sample_weight = tf.where(is_sw_one & tf.equal(features['wind'], 1), 2.0, sample_weight)
 
     return processed_inputs, targetInt, sample_weight
 #################################################################################################################################
@@ -328,12 +334,14 @@ def find_corrupted_tfrecords(all_files):
 
 
 #################################################################################################################################
-def get_dataset(pos_filenames, neg_filenames, batch_size, training=False, pos_ratio=0.1):
+def get_dataset(tor_filenames, pretor_filenames, neg_filenames, batch_size, training=False, tor_ratio=0.03, pretor_ratio=0.03):
 
     """
-    pos_filenames: List of shards containing tornado/pretor samples
+    tor_filenames: List of shards containing tornado samples
+    pretor_filenames: List of shards containing pretor samples.
     neg_filenames: List of shards containing non-severe/hail/wind samples
-    pos_ratio: The fraction of the batch that should be positive (0.1 = 10/100)
+    tor_ratio: The fraction of the batch that should be tornadic (0.1 = 10/100)
+    pretor_ratio: The fraction of the batch that should be pre-tornadic (0.03 = 3/100)
     """
 
     def _build_stream(filenames, shuffle_files=True):
@@ -359,24 +367,26 @@ def get_dataset(pos_filenames, neg_filenames, batch_size, training=False, pos_ra
 
     # --- THE MERGE POINT ---
     if training:
-        # Create two separate streams
-        pos_ds = _build_stream(pos_filenames, shuffle_files=True)
+        # Create three separate streams
+        tor_ds = _build_stream(tor_filenames, shuffle_files=True)
+        pretor_ds = _build_stream(pretor_filenames, shuffle_files=True)
         neg_ds = _build_stream(neg_filenames, shuffle_files=True)
 
         # Shuffle individual samples within their respective streams
         # 5000 is usually enough buffer to mix the interleaved shards
-        pos_ds = pos_ds.shuffle(5000)
+        tor_ds = tor_ds.shuffle(5000)
+        pretor_ds = pretor_ds.shuffle(5000)
         neg_ds = neg_ds.shuffle(5000)
 
-        # Balanced Sampling: Pick from pos_ds and neg_ds at the specified ratio
+        # Balanced Sampling: Pick from datasets at the specified ratio
         dataset = tf.data.Dataset.sample_from_datasets(
-            [pos_ds, neg_ds], 
-            weights=[pos_ratio, 1.0 - pos_ratio],
+            [tor_ds, pretor_ds, neg_ds], 
+            weights=[tor_ratio, pretor_ratio, 1.0 - tor_ratio - pretor_ratio],
             stop_on_empty_dataset=False
         )
     else:
         # For validation or if no balancing is needed, use a single stream
-        all_files = pos_filenames + neg_filenames
+        all_files = tor_filenames + pretor_filenames + neg_filenames
         dataset = _build_stream(all_files, shuffle_files=training)
         if training: # This should really only be validation, but keeping this here JIC.
             dataset = dataset.shuffle(10000)
@@ -419,13 +429,15 @@ for pattern in config['train_list']:
 
 # Separate files based on folder/filename naming convention
 # Looking for 'tornado' or 'pretor' in the path
-pos_train_files = [f for f in all_train_files if 'tornado' in f or 'pretor' in f]
+tor_train_files = [f for f in all_train_files if 'tornado' in f]
+pretor_train_files = [f for f in all_train_files if 'pretor' in f]
 neg_train_files = [f for f in all_train_files if not ('tornado' in f or 'pretor' in f)]
-print(f"Pos Shards: {len(pos_train_files)} | Neg Shards: {len(neg_train_files)}")
+print(f"Pos Shards: {len(pretor_train_files) + len(tor_train_files)} | Neg Shards: {len(neg_train_files)}")
 print('steps_per_epoch:', config['steps_per_epoch'])
 
 with tf.device('/cpu:0'):
-    train_ds = get_dataset(pos_train_files, neg_train_files, BATCHSIZE, training=True, pos_ratio=config['pos_ratio'])
+    train_ds = get_dataset(tor_train_files, pretor_train_files, neg_train_files, BATCHSIZE, training=True, 
+                           tor_ratio=config['tor_ratio'], pretor_ratio=config['pretor_ratio'])
 
 # For quick_looks or error-checking
 #for inputs,labels in train_ds:
@@ -450,11 +462,13 @@ all_val_files = []
 for pattern in config['val_list']:
     all_val_files.extend(glob.glob(pattern))
 
-pos_val_files = [f for f in all_val_files if 'tornado' in f or 'pretor' in f]
+tor_val_files = [f for f in all_val_files if 'tornado' in f]
+pretor_val_files = [f for f in all_val_files if 'pretor' in f]
 neg_val_files = [f for f in all_val_files if not ('tornado' in f or 'pretor' in f)]
 
 with tf.device('/cpu:0'):
-    val_ds = get_dataset(pos_val_files, neg_val_files, BATCHSIZE, training=False, pos_ratio=config['pos_ratio'])
+    val_ds = get_dataset(tor_val_files, pretor_val_files, neg_val_files, BATCHSIZE, training=False,
+                         tor_ratio=config['tor_ratio'], pretor_ratio=config['pretor_ratio'])
 
 
 outdir = config['outdir']

@@ -34,9 +34,21 @@ def find_s3_nexrad(radar, dt):
             if len(parts) < 3: continue
             f_dt = datetime.strptime(f"{parts[0][4:]}_{parts[1]}", "%Y%m%d_%H%M%S")
             file_dts.append((f, f_dt))
-    
-        best_file = min(file_dts, key=lambda x: abs(x[1] - dt))
-        return f"s3://{best_file[0]}" if abs(best_file[1] - dt).seconds < 600 else None
+   
+        # Filter for files that occurred at or BEFORE the target datetime
+        before_dt = [x for x in file_dts if x[1] <= dt]
+ 
+        if not before_dt: 
+            # If no files exist before dt on this day, you might want to 
+            # search the previous day's folder, but for now we return None.
+            return None
+
+        # Pick the one with the maximum time (the "latest" of the "before" files)
+        best_file = max(before_dt, key=lambda x: x[1])
+
+        time_diff = (dt - best_file[1]).total_seconds()
+        return f"s3://{best_file[0]}" if time_diff < 600 else None
+
     except:
         print('WARNING: exception when getting s3 URL')
         return None
@@ -340,7 +352,7 @@ def process_events(event_list, model_path, config_path, out_dir, run_shap=False,
             # Run Prediction
             preds = conv_model.predict(tensors, verbose=0)
             prob = np.squeeze(preds)
-            print(prob);sys.exit() 
+           # print(prob);sys.exit() 
             # Generate SHAP values
             if run_shap:
                # SHAP Explainer needs a function that takes a numpy array and returns a prediction
@@ -427,9 +439,9 @@ if __name__ == "__main__":
     my_events = [
     #    {'time': datetime(2026, 4, 2, 20, 4), 'lat': 40.95, 'lon': -92.58, 'radar': 'KDVN'},
     #    {'time': datetime(2026, 4, 2, 20, 48), 'lat': 41.29, 'lon': -91.95, 'radar': 'KDVN'},
-        {'time': datetime(2026, 4, 2, 21, 7, 16), 'lat': 41.414, 'lon': -91.7322, 'radar': 'KDVN'},
+    #    {'time': datetime(2026, 4, 2, 21, 7, 16), 'lat': 41.414, 'lon': -91.7322, 'radar': 'KDVN'},
     #    {'time': datetime(2026, 4, 2, 21, 23), 'lat': 41.51, 'lon': -91.458, 'radar': 'KDVN'},
-    #    {'time': datetime(2026, 4, 2, 21, 36), 'lat': 41.61, 'lon': -91.37, 'radar': 'KDVN'},
+        {'time': datetime(2026,4,29,0,23,46), 'lat': 35.004, 'lon':-91.183, 'radar':'KLZK'},
     ]
    
     model_dir = 'static/model' 
@@ -439,6 +451,6 @@ if __name__ == "__main__":
         model_path=f'{model_dir}/fit_conv_model.keras',
         config_path=f'{model_dir}/model_config.pkl',
         out_dir='./tornado_plots',
-        run_shap=True,
+        run_shap=False,
         top_two_only=True,
     )

@@ -30,7 +30,7 @@ def repair_single_shard(file_path, output_base):
             example.ParseFromString(raw_record.numpy())
             
             # REPAIR LOGIC: Force these keys to Int64List
-            for key in ['pretorMinutes', 'magtornado']:
+            for key in ['hail', 'wind']:
                 if key in example.features.feature:
                     feat = example.features.feature[key]
                     
@@ -65,6 +65,7 @@ def parallel_repair(input_pattern, output_dir, max_workers=20):
         list(tqdm(executor.map(worker_func, shards), total=len(shards)))
 
 
-input_pattern = "/work2/jcintineo/torcnn/tfrecs_combined/201[1-7]??/*/*tfrec"
+input_pattern = "/work2/jcintineo/torcnn/tfrecs_combined/201[1-9]??/*/*tfrec"
 output_dir = "/work2/jcintineo/torcnn/tfrecs_TMP" 
-parallel_repair(input_pattern, output_dir, max_workers=40)
+assert(os.path.dirname(os.path.dirname(os.path.dirname(input_pattern))) != output_dir)
+parallel_repair(input_pattern, output_dir, max_workers=80)

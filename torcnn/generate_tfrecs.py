@@ -240,19 +240,19 @@ def extract_row_to_bytes(row,
         info['V_rotDistance'] = row['V_rotDistance']
         info['Elev'] = row['Elev']
         info['tornado'] = np.int32(row['tornado'])
-        info['hail'] = row['hail']
-        info['wind'] = row['wind']
+        info['hail'] = int(row['hail'])
+        info['wind'] = int(row['wind'])
         info['spout'] = row['spout']                                                    # landspout or waterspout
         info['maghail'] = row['maghail']
         info['magwind'] = row['magwind']
-        info['magtornado'] = -1 if row['magtornado'] == 'U' else float(row['magtornado'])
-        info['pretorMinutes'] = row.get('pretorMinutes', -1.0)
+        info['magtornado'] = int(-1) if row['magtornado'] == 'U' else int(row['magtornado'])
+        info['pretorMinutes'] = int(row.get('pretorMinutes', -1))
         #info['severeWarned'] = row['severeWarned']
         #info['tornadoWarned'] = row['tornadoWarned']
         #info['marineWarned'] = row['marineWarned']    
-        info['pretor'] = np.int32(row.get('pretor', 0))
+        info['pretor'] = int(row.get('pretor', 0))
         if info['pretor']:
-                info['tornado'] = np.int32(1) # NB the TORP csvs say tornado=0 for each pretor sample
+                info['tornado'] = int(1) # NB the TORP csvs say tornado=0 for each pretor sample
      
      
         # Anchoring timestamp
@@ -409,7 +409,7 @@ if __name__ == "__main__":
 
     max_shard_nsamples = 650
 
-    max_workers = 120 
+    max_workers = 64
 
     hs = halfsize = (64, 128)
 
@@ -452,7 +452,7 @@ if __name__ == "__main__":
     # Set up the worker arguments (partial)
     worker_func = functools.partial(extract_row_to_bytes, **extract_row_to_bytes_args)
 
-    years = [2015, 2016, 2017, 2018, 2019]
+    years = [2020, 2021, 2022, 2023, 2024]
 
     # Start the executor ONCE and reuse it for all years/months
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:

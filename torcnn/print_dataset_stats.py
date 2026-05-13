@@ -16,28 +16,31 @@ def stats(dd):
     p_pretor60 = np.round(dd['pretor_60']/total,3)
     return total, p_hail, p_wind, p_tor, p_nonsev, p_pretor15, p_pretor30, p_pretor45, p_pretor60
 
-f=pickle.load(open('sample_counts_combined.pickle','rb'))
+f=pickle.load(open('sample_counts_combined_2011-2024.pickle','rb'))
 years=np.sort(np.array(list(f.keys())))
 total_totals = total_tor = total_hail = total_wind = total_nonsev = total_pretor = 0
 for y in years:
+    #if int(y) > 2019: continue
     total, hail, wind, tor, nonsev, pretor15, pretor30, pretor45, pretor60 = stats(f[y])
     total_totals += total
     total_tor += tor * total
     total_wind += wind * total
     total_hail += hail * total
     total_nonsev += nonsev * total
-    total_pretor += (pretor15 + pretor30 + pretor45 + pretor60)*total
+    #total_pretor += (pretor15 + pretor30 + pretor45 + pretor60)*total
+    total_pretor += (pretor15 + pretor30)*total
     print(y)
     print('total samples:', total)
-    print('%tornado:', tor*100)
-    print('%pretor:',(pretor15 + pretor30 + pretor45 + pretor60)*100)
-    print('%hail:',hail*100)
-    print('%wind:',wind*100)
-    print('%nonsev:',nonsev*100)
+    print('%tornado:', np.round(tor*100,1))
+    #print('%pretor:',np.round((pretor15 + pretor30 + pretor45 + pretor60)*100,1))
+    print('%pretor:', np.round((pretor15 + pretor30)*100,1))
+    print('%hail:', np.round(hail*100,1))
+    print('%wind:', np.round(wind*100,1))
+    print('%nonsev:', np.round(nonsev*100,1))
     print('')
 print('TOTAL')
 print('tornado:',int(total_tor), np.round(100*int(total_tor)/total_totals,1),'%')
-print('pretor:', int(total_pretor), np.round(100*int(total_pretor)/total_totals,1),'%')
+print('pretor:', int(total_pretor), np.round(100*int(total_pretor)/total_totals,2),'%')
 print('hail:', int(total_hail), np.round(100*int(total_hail)/total_totals,1),'%')
 print('wind:', int(total_wind), np.round(100*int(total_wind)/total_totals,1),'%')
 print('nonsev:', int(total_nonsev), np.round(100*int(total_nonsev)/total_totals,1),'%')

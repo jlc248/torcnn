@@ -356,11 +356,11 @@ if filelist:
     # this is a custom, ordered list of tfrecs
     val_lists = [filelist]
 else:
-    # Create the test dataset for running the permutation
+    # Create the test dataset
     year = "2018"
     inroot = f"/work2/jcintineo/torcnn/tfrecs_combined/{year}*/"
     # subdirs: nontor, pretor_15, pretor_30, pretor_45, pretor_60, pretor_120, tor, spout
-    subglobs = ["wind", "hail", "nonsev", "pretor_15", "pretor_30"]
+    subglobs = ["tornado", "wind", "hail", "nonsev", "pretor_15", "pretor_30"]
     
     # leave these empty if you only want one run
     #month_subdirs = ['01-02','03','04','05','06','07','08','09','10','11-12']

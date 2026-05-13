@@ -16,8 +16,8 @@ def tf_config():
     # The number of records/samples, NOT the number of files.
     # Find this apriori for sharded datasets using count_records.py
     ## output of count_records.py
-    cts = pickle.load(open('sample_counts_combined.pickle','rb'))
-    train_years = [2011, 2012, 2013, 2014, 2015, 2016, 2017, 2019] # 2019 has no pretor counts
+    cts = pickle.load(open('sample_counts_combined_2011-2024.pickle','rb'))
+    train_years = [2011, 2012, 2013, 2014, 2015, 2016, 2019, 2020, 2021, 2022, 2023, 2024] # 2019+ have no pretor counts
     val_years = [2018]
     pos_classes = ['tornado', 'pretor_15', 'pretor_30']
     neg_classes = ['hail', 'wind', 'nonsev']
@@ -33,7 +33,7 @@ def tf_config():
     # For conventional CNNs
     if cnn == 'cnn':
         ngpu = 1
-        batchsize = max([ngpu,1]) * 256
+        batchsize = max([ngpu,1]) * 256 
         targets = ['tornado']
   
         tfrec_dir = "/work2/jcintineo/torcnn/tfrecs_combined" 
@@ -48,8 +48,8 @@ def tf_config():
             for cl in pos_classes + neg_classes:
                 val_list.append(f"{tfrec_dir}/{yy}??/{cl}/{cl}_{yy}??_*tfrec") 
 
-        outprefix = '/work2/jcintineo/torcnn/tests/2011-19/'
-        outdir = f'{outprefix}/test04'
+        outprefix = '/work2/jcintineo/torcnn/tests/2011-24/'
+        outdir = f'{outprefix}/test01'
   
         # Inputs
         # 'Reflectivity', 'Velocity', 'SpectrumWidth', 'AzShear', 'DivShear', 'RhoHV', 'PhiDP', 'Zdr', 'range_folded_mask', 'out_of_range_mask', 'range', 'range_inv'
@@ -109,7 +109,8 @@ def tf_config():
     return {
            'coord_conv':coord_conv,
            'use_attention':False,
-           'pos_ratio': 0.05, # The positive fraction that should be in each batch
+           'tor_ratio': 0.03535354, # The tornadic fraction that should be in each batch
+           'pretor_ratio': 0.015, # The pre-tornadic fraction that should be in each batch
            'ps':ps,
            'img_aug':img_aug,
            'sample_weights':sample_weights,
