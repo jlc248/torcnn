@@ -160,19 +160,52 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
             # A. Special Channels (Masks/Range)
             if varname in ['range', 'range_inv', 'range_folded_mask', 'out_of_range_mask']:
                 # Calculate these relative to the Velocity sweep coordinates
-                v_patch = v_sweep.fields['velocity']['data'] #.data
-                v_az_inds = np.arange(v_az_idx - hs[0], v_az_idx + hs[0]) % v_patch.shape[0]
+                v_data = v_sweep.fields['velocity']['data'] #.data
+                naz, ngates = v_data.shape
+                v_az_inds = np.arange(v_az_idx - hs[0], v_az_idx + hs[0]) % naz
                 v_rng_slice = slice(v_gate_idx - hs[1], v_gate_idx + hs[1])
-                local_v_patch = v_patch[v_az_inds, v_rng_slice]
-                
+               
                 if varname == 'out_of_range_mask':
-                    data_patch = np.full(local_v_patch.shape, 0., dtype=np.float32) #FIXME all set to 0 for now
+                    if v_rng_slice.start < 0: # Fix if too close to radar, fill with 0s
+                        nfill_rng = v_rng_slice.start * -1
+                        out_of_range = np.ones((hs[0]*2, nfill_rng), dtype=np.float32)
+                        in_range = np.zeros((hs[0]*2, hs[1]*2 - nfill_rng), dtype=np.float32)
+                        data_patch = np.concatenate((out_of_range, in_range), axis=1)
+                    elif v_rng_slice.stop > ngates: # Fix if too from radar, fill with 0s
+                        nfill_rng = v_rng_slice.stop - ngates
+                        in_range = np.zeros((hs[0]*2, ngates - v_rng_slice.start), dtype=np.float32)
+                        out_of_range = np.zeros((hs[0]*2, nfill_rng), dtype=np.float32)
+                        data_patch = np.concatenate((in_range, out_of_range), axis=1)
+                    else:
+                        data_patch = np.full(v_data.shape, 0., dtype=np.float32)
+
                 elif varname == 'range_folded_mask':
-                    #is_range_folded  = np.isclose(local_v_patch, -64.0, atol=0.1)
-                    #data_patch = is_range_folded.astype(np.float32) 
-                    data_patch = np.full(local_v_patch.shape, 0., dtype=np.float32) #FIXME all set to 0 for now
+                    is_range_folded  = np.isclose(v_data.data, -64.0, atol=0.1).astype(np.float32)
+                    if v_rng_slice.start < 0: # Fix if too close to radar, fill with 0s
+                        nfill_rng = v_rng_slice.start * -1
+                        v_rng_slice = slice(0, v_gate_idx + hs[1])
+                        partial_patch = is_range_folded[v_az_inds, v_rng_slice]
+                        data_patch = np.concatenate([np.zeros((hs[0]*2, nfill_rng), dtype=np.float32), partial_patch], axis=1)
+                    elif v_rng_slice.stop > ngates: # Fix if too from radar, fill with 0s
+                        partial_patch = is_range_folded[v_az_inds, v_rng_slice.start:ngates]
+                        nfill = np.zeros((v_az_inds, v_rng_slice.stop - ngates), dtype=np.float32)
+                        data_patch = np.concatenate([partial_patch, nfill], axis=1)
+                    else:
+                        data_patch = is_range_folded[v_az_inds, v_rng_slice]
+
                 elif varname in ['range', 'range_inv']:
-                    r_meters = v_sweep.range['data'][v_rng_slice] 
+                    if v_rng_slice.start < 0: # Fix if too close to radar, fill with 0s
+                        nfill = np.zeros((v_rng_slice.start*-1))
+                        partial_patch = v_sweep.range['data'][0:v_rng_slice.stop]
+                        r_meters = np.concatenate((nfill, partial_patch))
+                        
+                    elif v_rng_slice.stop > ngates: # Fix if too from radar, fill with 0s
+                        partial_patch = v_sweep.range['data'][v_rng_slice.start:ngates]
+                        nfill = np.zeros((v_rng_slice.stop - ngates))
+                        r_meters = np.concatenate((partial_patch, nfill))
+                    else:
+                        r_meters = v_sweep.range['data'][v_rng_slice].data
+
                     # Convert to km
                     r_patch = np.repeat(np.expand_dims(r_meters / 1000., axis=0), hs[0]*2, axis=0)
                     rmin, rmax = bsinfo['range']['vmin'], bsinfo['range']['vmax']
@@ -192,9 +225,15 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                 n_rays = target_sweep.azimuth['data'].shape[0]
                 local_az_inds = np.arange(local_az_idx - hs[0], local_az_idx + hs[0]) % n_rays
                 local_rng_slice = slice(local_gate_idx - hs[1], local_gate_idx + hs[1])
-
-                raw_patch = target_sweep.fields[py_f]['data'][local_az_inds, local_rng_slice]
-                
+                # Fix if too close to radar, fill with 0s
+                if local_rng_slice.start < 0:
+                    nfill_rng = local_rng_slice.start * -1
+                    local_rng_slice = slice(0, local_gate_idx + hs[1])
+                    partial_patch = target_sweep.fields[py_f]['data'][local_az_inds, local_rng_slice]
+                    raw_patch = np.concatenate([np.zeros((hs[0]*2, nfill_rng), dtype=np.float32)-99900.0, partial_patch], axis=1)
+                else:
+                    raw_patch = target_sweep.fields[py_f]['data'][local_az_inds, local_rng_slice]
+              
                  # Get the mask, because the dealiasing removed it for velocity
                # if py_f == 'dealiased_velocity':
                #     #ref_mask = target_sweep.fields['reflectivity']['data'].mask[local_az_inds, local_rng_slice]
@@ -222,11 +261,11 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                 vmin, vmax = bsinfo[varname]['vmin'], bsinfo[varname]['vmax']
                 if varname == 'Velocity':
                     data_patch = np.clip(clean_patch / max(abs(vmin), abs(vmax)), -1, 1)
-                    pickle.dump(data_patch, open('velocity_pyart.pkl','wb'))
+                    #pickle.dump(data_patch, open('velocity_pyart.pkl','wb'))
                 else:
                     data_patch = np.clip((clean_patch - vmin) / (vmax - vmin), 0, 1)
-                    if varname=='Reflectivity':
-                        pickle.dump(data_patch, open('ref_pyart.pkl', 'wb'))
+                    #if varname=='Reflectivity':
+                    #    pickle.dump(data_patch, open('ref_pyart.pkl', 'wb'))
                
                 #plt.imshow(clean_patch)
                 #plt.show()
@@ -237,6 +276,7 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
             
 
             p4d = np.expand_dims(data_patch.astype(np.float32), axis=(0, -1))
+                
             X = p4d if X is None else np.concatenate((X, p4d), axis=-1)
             
         model_inputs['radar' if ii == 0 else 'coords'] = X
@@ -441,7 +481,7 @@ if __name__ == "__main__":
     #    {'time': datetime(2026, 4, 2, 20, 48), 'lat': 41.29, 'lon': -91.95, 'radar': 'KDVN'},
     #    {'time': datetime(2026, 4, 2, 21, 7, 16), 'lat': 41.414, 'lon': -91.7322, 'radar': 'KDVN'},
     #    {'time': datetime(2026, 4, 2, 21, 23), 'lat': 41.51, 'lon': -91.458, 'radar': 'KDVN'},
-        {'time': datetime(2026,4,29,0,23,46), 'lat': 35.004, 'lon':-91.183, 'radar':'KLZK'},
+        {'time': datetime(2026,5,26,0,27,47), 'lat': 31.232, 'lon':-85.314, 'radar':'KEOX'},
     ]
    
     model_dir = 'static/model' 
