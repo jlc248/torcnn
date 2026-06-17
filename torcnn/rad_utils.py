@@ -383,7 +383,7 @@ def dealias_velocity_pyart(raddt: datetime,
                            radar: pyart.core.Radar = None,
                            n_gates: int = -1,
                            rf_mask: np.ndarray = None,
-) -> tuple[np.ndarray, pyart.core.radar.Radar]:
+) -> tuple[np.ndarray, pyart.core.radar.Radar, int]:
     """
     Using a pyart radar object or a file_path, dealias doppler velocity
     data and return the numpy array. Assumes that only one of file_path
@@ -400,6 +400,7 @@ def dealias_velocity_pyart(raddt: datetime,
     Returns:
       - final_vel (np.ma.MaskedArray): A 2D array in polar coords; the dealiased velocity data
       - radar_sweep (pyart.core.Radar): Pyart object for the sweep corresponding to raddt
+      - idx (int): the integer index for the correct velocity sweep
     """
 
     if file_path is not None:
@@ -421,22 +422,26 @@ def dealias_velocity_pyart(raddt: datetime,
         datetime(t.year, t.month, t.day, t.hour, t.minute, t.second, t.microsecond) 
         for t in sweep_times
     ]
-
+   
     # Find the closest tilt WITHOUT going out of bounds
     # We want the tilt that started most recently relative to raddt
     idx = np.argmin([abs((t - raddt).total_seconds()) for t in standard_sweep_times])
     tilt_ind = ind[idx]
-    
-    
+     
     # Extract and check
     radar_sweep = radar.extract_sweeps([tilt_ind])
     velocity_data = radar_sweep.fields['velocity']['data']
     
-    # If the data is empty, we can't dealias
     if np.ma.count(velocity_data) == 0:
-        # Instead of crashing, maybe return raw or zeros? 
-        # But if the model NEEDS dealiased data, we raise.
-        raise ValueError(f'Sweep {tilt_ind} has 0 valid velocity gates.')
+        # If the data is empty, we can't dealias 
+        # Check idx+1
+        idx += 1
+        tilt_ind = ind[idx]
+        radar_sweep = radar.extract_sweeps([tilt_ind])
+        velocity_data = radar_sweep.fields['velocity']['data'] 
+        if np.ma.count(velocity_data) == 0:
+            # If the model NEEDS dealiased data, we raise.
+            raise ValueError(f'Sweep {tilt_ind} has 0 valid velocity gates.')
 
     # Filter (Relaxed for better de-aliasing coverage)
     gatefilter = pyart.filters.GateFilter(radar_sweep)
@@ -480,7 +485,7 @@ def dealias_velocity_pyart(raddt: datetime,
     #if rf_mask is not None:
     #    final_vel = np.where(rf_mask, np.nan, final_vel)
     
-    return final_dvel, radar
+    return final_dvel, radar, idx
 #-----------------------------------------------------------------------------------------------
 def plot_radar(
         data: dict,

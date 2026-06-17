@@ -77,7 +77,7 @@ def get_sweep_indexes(radar: pyart.core.radar.Radar,
     for i in idx05:
         ray_idx = radar.sweep_start_ray_index['data'][i]
         sweep_nyquists[i] = radar.instrument_parameters['nyquist_velocity']['data'][ray_idx]
-
+    
     # 3. Find the Doppler candidate (Anchor) closest to vel_dt
     # We define 'Doppler-capable' as any sweep that isn't the 'low-nyquist' partner
     # Logic: if there are two sweeps close in time, the one with the higher Nyquist is V
@@ -86,10 +86,23 @@ def get_sweep_indexes(radar: pyart.core.radar.Radar,
         start_idx = radar.sweep_start_ray_index['data'][i]
         diff = abs((all_times[start_idx] - vel_dt).total_seconds())
         time_diffs.append(diff)
-    
+
     # This is the sweep that matches your timestamp
     v_idx = idx05[np.argmin(time_diffs)]
     
+    # Extract and check
+    radar_sweep = radar.extract_sweeps([v_idx])
+    velocity_data = radar_sweep.fields['velocity']['data']
+    if np.ma.count(velocity_data) == 0:
+        # If the data is empty, we can't dealias
+        # Check idx+1
+        v_idx += 1
+        radar_sweep = radar.extract_sweeps([v_idx])
+        velocity_data = radar_sweep.fields['velocity']['data']
+        if np.ma.count(velocity_data) == 0:
+            # If the model NEEDS dealiased data, we raise.
+            raise ValueError(f'Sweep {tilt_ind} has 0 valid velocity gates.')
+
     # 4. Now find the BEST Reflectivity partner for this specific v_idx
     # Check if there is a sweep close by with a LOWER Nyquist
     v_time = all_times[radar.sweep_start_ray_index['data'][v_idx]]
@@ -127,18 +140,19 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
 
     # Now perform dealiasing
     t0=time.time()
-    d_vel, radar_with_dvel = rad_utils.dealias_velocity_pyart(
+    d_vel, radar_with_dvel, _ = rad_utils.dealias_velocity_pyart(
                          raddt=raddt,
                          radar=radar,
                          tilt=0.5
     )
+    
     secs = time.time()-t0
     print(f"Dealasing took {secs:.2f} seconds.")
     
     # Find the Surveillance sweep that belongs with it
     # In NEXRAD Split-Cut, Surveillance (Z) usually immediately precedes Doppler (V)
     z_idx, v_idx = get_sweep_indexes(radar, raddt)
-    
+   
     field_to_sweep = {
         'reflectivity': z_idx,
         'cross_correlation_ratio': z_idx,
@@ -177,7 +191,7 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                         out_of_range = np.zeros((hs[0]*2, nfill_rng), dtype=np.float32)
                         data_patch = np.concatenate((in_range, out_of_range), axis=1)
                     else:
-                        data_patch = np.full(v_data.shape, 0., dtype=np.float32)
+                        data_patch = np.full((hs[0]*2, hs[1]*2), 0., dtype=np.float32)
 
                 elif varname == 'range_folded_mask':
                     is_range_folded  = np.isclose(v_data.data, -64.0, atol=0.1).astype(np.float32)
@@ -204,7 +218,7 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                         nfill = np.zeros((v_rng_slice.stop - ngates))
                         r_meters = np.concatenate((partial_patch, nfill))
                     else:
-                        r_meters = v_sweep.range['data'][v_rng_slice].data
+                        r_meters = v_sweep.range['data'][v_rng_slice]
 
                     # Convert to km
                     r_patch = np.repeat(np.expand_dims(r_meters / 1000., axis=0), hs[0]*2, axis=0)
@@ -267,8 +281,6 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                     #if varname=='Reflectivity':
                     #    pickle.dump(data_patch, open('ref_pyart.pkl', 'wb'))
                
-                #plt.imshow(clean_patch)
-                #plt.show()
             #data_patch = np.flipud(np.fliplr(data_patch))
             #print(varname)
             #plt.imshow(data_patch)
@@ -276,7 +288,6 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
             
 
             p4d = np.expand_dims(data_patch.astype(np.float32), axis=(0, -1))
-                
             X = p4d if X is None else np.concatenate((X, p4d), axis=-1)
             
         model_inputs['radar' if ii == 0 else 'coords'] = X
@@ -481,7 +492,8 @@ if __name__ == "__main__":
     #    {'time': datetime(2026, 4, 2, 20, 48), 'lat': 41.29, 'lon': -91.95, 'radar': 'KDVN'},
     #    {'time': datetime(2026, 4, 2, 21, 7, 16), 'lat': 41.414, 'lon': -91.7322, 'radar': 'KDVN'},
     #    {'time': datetime(2026, 4, 2, 21, 23), 'lat': 41.51, 'lon': -91.458, 'radar': 'KDVN'},
-        {'time': datetime(2026,5,26,0,27,47), 'lat': 31.232, 'lon':-85.314, 'radar':'KEOX'},
+    #    {'time': datetime(2026,5,26,0,27,47), 'lat': 31.232, 'lon':-85.314, 'radar':'KEOX'},
+         {'time': datetime(2026,6,4,22,13,0), 'lat': 39.297, 'lon':-96.823, 'radar':'KTWX'},
     ]
    
     model_dir = 'static/model' 
@@ -490,7 +502,7 @@ if __name__ == "__main__":
         my_events, 
         model_path=f'{model_dir}/fit_conv_model.keras',
         config_path=f'{model_dir}/model_config.pkl',
-        out_dir='./tornado_plots',
+        out_dir='./tornado_plots/KS_20260604',
         run_shap=False,
         top_two_only=True,
     )
