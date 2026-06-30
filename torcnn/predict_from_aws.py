@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import rad_utils 
 import shap
-
+import joblib
 import tensorflow as tf
 
 logger = logging.getLogger(__name__)
@@ -261,7 +261,7 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                #     raw_patch = np.ma.masked_array(raw_patch, mask=ref_mask)
 
                 clean_patch = np.ma.filled(raw_patch, fill_value=-99900.0)
-                
+ 
                 # Store for plotting (using master plot_dict)
                 if varname not in plot_dict:
                     plot_dict[varname] = {'data': clean_patch}
@@ -275,8 +275,12 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                 vmin, vmax = bsinfo[varname]['vmin'], bsinfo[varname]['vmax']
                 if varname == 'Velocity':
                     data_patch = np.clip(clean_patch / max(abs(vmin), abs(vmax)), -1, 1)
+                    missing_mask = (clean_patch == -99900).astype(bool) 
                     #pickle.dump(data_patch, open('velocity_pyart.pkl','wb'))
                 else:
+                #    print(varname, vmin, vmax)
+                #    plt.imshow(clean_patch)
+                #    plt.show()
                     data_patch = np.clip((clean_patch - vmin) / (vmax - vmin), 0, 1)
                     #if varname=='Reflectivity':
                     #    pickle.dump(data_patch, open('ref_pyart.pkl', 'wb'))
@@ -292,10 +296,10 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
             
         model_inputs['radar' if ii == 0 else 'coords'] = X
 
-    return model_inputs, plot_dict
+    return model_inputs, plot_dict, missing_mask
 
 #---------------------------------------------------------------------------------------------------------
-def plot_shap_maps(shap_values, input_tensor, channel_names, out_path, only_top_two=False):
+def plot_importance_maps(shap_values, input_tensor, channel_names, out_path, only_top_two=False):
     """
     Plots the spatial distribution of SHAP values for each radar channel.
     """
@@ -308,6 +312,7 @@ def plot_shap_maps(shap_values, input_tensor, channel_names, out_path, only_top_
     
     # Calculate global importance per channel to find "Top Two"
     # We use mean absolute SHAP value as the importance metric
+    print(shap_values.shape);sys.exit()
     importance = [np.abs(sv[:, :, i]).mean() for i in range(n_channels)]
     indices = np.argsort(importance)[::-1] # Sort descending
     
@@ -322,7 +327,7 @@ def plot_shap_maps(shap_values, input_tensor, channel_names, out_path, only_top_
     for i, idx in enumerate(indices):
         ax = axes[0, i]
         # Calculate a symmetric vmin/vmax for the SHAP heatmap
-        vmax = np.max(np.abs(sv[:, :, idx]))
+        vmax = np.max(np.abs(sv[:, :, idx])) * 0.75
         
         # Plot the SHAP values as a heatmap
         im = ax.imshow(sv[:, :, idx], cmap='RdBu_r', vmin=-vmax, vmax=vmax)
@@ -338,37 +343,57 @@ def plot_shap_maps(shap_values, input_tensor, channel_names, out_path, only_top_
     plt.close()
 
 #---------------------------------------------------------------------------------------------------------
-def get_integrated_gradients(model, input_tensor, baseline=None, steps=50):
+def get_integrated_gradients(model, input_tensor, baseline=None, steps=50, target_logits=True):
     """
-    Calculates Integrated Gradients for a pixel-by-pixel importance map.
+    Calculates Integrated Gradients for a pixel-by-pixel and channel-by-channel importance map.
+    Handles Keras 3 / TF tensors safely without silent broadcasting bugs.
     """
+    # 1. Ensure inputs have a batch dimension (1, H, W, C) for consistency
+    if len(input_tensor.shape) == 3:
+        input_tensor = np.expand_dims(input_tensor, axis=0)
+        
     if baseline is None:
         baseline = np.zeros_like(input_tensor)
+    elif len(baseline.shape) == 3:
+        baseline = np.expand_dims(baseline, axis=0)
 
-    # 1. Create interpolated images between baseline and input
-    alphas = np.linspace(0, 1, steps)
-    # Shape: (steps, H, W, C)
-    interpolated = baseline + alphas[:, np.newaxis, np.newaxis, np.newaxis] * (input_tensor - baseline)
+    # Prepare logit model if requested to avoid sigmoid saturation
+    if target_logits and hasattr(model.layers[-1], 'activation') and model.layers[-1].activation.__name__ == 'sigmoid':
+        # Reconstruct a temporary model that outputs the raw logits before sigmoid
+        logit_model = tf.keras.Model(inputs=model.input, outputs=model.layers[-1].input)
+    else:
+        logit_model = model
+
+    # 2. Create interpolated images along the path
+    alphas = np.linspace(0, 1, steps, dtype=np.float32)
+    
+    # Calculate the true delta between the full image and full baseline
+    delta = input_tensor[0] - baseline[0]  # Shape: (H, W, C)
+    
+    # Generate path: Shape (steps, H, W, C)
+    interpolated = baseline[0] + alphas[:, np.newaxis, np.newaxis, np.newaxis] * delta
     interpolated = tf.cast(interpolated, tf.float32)
 
-    # 2. Calculate gradients for all interpolated images
+    # 3. Calculate gradients along the path
     with tf.GradientTape() as tape:
         tape.watch(interpolated)
-        predictions = model(interpolated)
-        # We want the gradient of the tornado probability
-        # If your model has one output, predictions is [steps, 1]
-    
-    grads = tape.gradient(predictions, interpolated)
+        predictions = logit_model(interpolated) # Shape: (steps, 1)
 
-    # 3. Average the gradients and multiply by (input - baseline)
-    avg_grads = tf.reduce_mean(grads, axis=0)
-    integrated_grad = (input_tensor[0] - baseline[0]) * avg_grads
-    
+    grads = tape.gradient(predictions, interpolated) # Shape: (steps, H, W, C)
+
+    # 4. Average gradients and multiply by the true delta
+    avg_grads = tf.reduce_mean(grads, axis=0) # Shape: (H, W, C)
+    integrated_grad = delta * avg_grads        # Shape: (H, W, C) - Safe element-wise math
+
     return integrated_grad.numpy()
 #---------------------------------------------------------------------------------------------------------
 # --- MAIN PIPELINE ---
 
-def process_events(event_list, model_path, config_path, out_dir, run_shap=False, top_two_only=False):
+def process_events(event_list, model_path, config_path, out_dir, calibrator=None, run_shap=False, top_two_only=False):
+    # If calibrator, load
+    if calibrator:
+        calibrator_obj = joblib.load(calibrator)    
+
     # Load Model & Config
     conv_model = keras.models.load_model(model_path, compile=False)
     config = pickle.load(open(config_path, 'rb'))
@@ -397,13 +422,26 @@ def process_events(event_list, model_path, config_path, out_dir, run_shap=False,
                 radar = pyart.io.read_nexrad_archive(f)
 
             # Extract Scaled Tensor and Unscaled Plot Data
-            tensors, plot_data = get_sector_data(radar, event['lat'], event['lon'], event['time'], hs, inputs, bsinfo)
+            tensors, plot_data, missing_mask = get_sector_data(radar, event['lat'], event['lon'], event['time'], hs, inputs, bsinfo)
             if tensors is None: continue
            
             # Run Prediction
             preds = conv_model.predict(tensors, verbose=0)
-            prob = np.squeeze(preds)
-           # print(prob);sys.exit() 
+            prob1 = prob = np.squeeze(preds)
+           
+            if calibrator:
+                print(prob1)
+                prob2 = prob = calibrator_obj.predict(np.array([prob1]))[0]
+                print(prob2)
+
+            # This is for a one-off run to get the background  
+            #for ii in range(len(inputs[0])):
+            #    plt.imshow(tensors['radar'][0,...,ii])
+            #    plt.show()
+            #pickle.dump(tensors['radar'], open('ig_background_Z-V-Rho-SW-range-mask.pkl','wb'))
+            #print(tensors['radar'].shape)
+            #sys.exit()
+
             # Generate SHAP values
             if run_shap:
                # SHAP Explainer needs a function that takes a numpy array and returns a prediction
@@ -429,11 +467,30 @@ def process_events(event_list, model_path, config_path, out_dir, run_shap=False,
 
                # plt.imshow(shap_map_data[...,0])
 
-                ig_map = get_integrated_gradients(conv_model, tensors['radar'], steps=50)
-                vmax = ig_map[...,1].max() * 0.75
-                vmin = vmax*-1
-                plt.imshow(ig_map[...,1], vmin=vmin, vmax=vmax, cmap='RdBu_r')
-                plt.show()
+                baseline = pickle.load(open('static/ig_background_Z-V-Rho-SW-range-mask.pkl', 'rb'))
+                ig_map = get_integrated_gradients(conv_model,
+                                                  tensors['radar'],
+                                                  baseline=None, #baseline,
+                                                  steps=50,
+                                                  target_logits=True
+                )
+                
+                # 2. Sum up everything (all pixels, all NEXRAD channels)
+                #total_ig_sum = np.sum(ig_map)
+                
+                # 3. Get the actual model predictions
+                #prob_baseline = np.squeeze(conv_model.predict(np.zeros_like(tensors['radar'])))
+                #prob_diff = prob1 - prob_baseline
+                
+                #print(f'sum of all IGs:  {total_ig_sum:.4f}')
+                #print(f'Actual Prob Diff: {prob_diff:.4f}')
+                # These two numbers should be nearly identical (ignoring minor approximation errors from step size)!
+                #sys.exit()
+
+                #vmax = ig_map[...,1].max() * 0.75
+                #vmin = vmax*-1
+                #plt.imshow(ig_map[...,1], vmin=vmin, vmax=vmax, cmap='RdBu_r')
+                #plt.show()
                 
                 # Using GradientExplainer
                 ## Background (10-20 samples of zeros is standard)
@@ -446,22 +503,22 @@ def process_events(event_list, model_path, config_path, out_dir, run_shap=False,
  
                 #plt.imshow(shap_values[0,...,0])
                 #plt.show()
-                sys.exit()
 
-                shap_fname = f"{out_dir}/SHAP_{event['radar']}_{event['time'].strftime('%Y%m%d_%H%M%S')}.png"
-                plot_shap_maps(shap_values, tensors, channel_names, shap_fname, only_top_two=top_two_only)
-                logger.info(f"Saved SHAP plot to {shap_fname}")
+                shap_fname = f"{out_dir}/IG_{event['radar']}_{event['time'].strftime('%Y%m%d_%H%M%S')}.png"
+                plot_importance_maps(ig_map, tensors, channel_names, shap_fname, only_top_two=top_two_only)
+                logger.info(f"Saved importance plot to {shap_fname}")
+
 
             # Create the Plot
             plot_channels = ['Reflectivity', 'Velocity', 'RhoHV', 'SpectrumWidth']
             fig = plt.figure(figsize=(7, 6))
-            
             rad_utils.plot_radar(
                 plot_data, 
                 channels=plot_channels, 
                 fig=fig, 
                 n_rows=2,
                 n_cols=2,
+                missing_mask = missing_mask,
                 include_title=False,
                 include_cbar=True, 
                 full_ppi=False
@@ -493,16 +550,21 @@ if __name__ == "__main__":
     #    {'time': datetime(2026, 4, 2, 21, 7, 16), 'lat': 41.414, 'lon': -91.7322, 'radar': 'KDVN'},
     #    {'time': datetime(2026, 4, 2, 21, 23), 'lat': 41.51, 'lon': -91.458, 'radar': 'KDVN'},
     #    {'time': datetime(2026,5,26,0,27,47), 'lat': 31.232, 'lon':-85.314, 'radar':'KEOX'},
-         {'time': datetime(2026,6,4,22,13,0), 'lat': 39.297, 'lon':-96.823, 'radar':'KTWX'},
+    #     {'time': datetime(2026,6,4,22,13,0), 'lat': 39.297, 'lon':-96.823, 'radar':'KTWX'},
+         {'time': datetime(2026,4,24,1,6,39), 'lat':36.32, 'lon':-97.942, 'radar':'KVNX'},
+    #     {'time': datetime(2026,6,30,15,40), 'lat':40.277, 'lon':-86.127, 'radar':'KIND'}, # IG BASELINE
     ]
    
-    model_dir = 'static/model' 
-    #model_dir = '/work2/jcintineo/torcnn/tests/2011-19/test01'
+    #model_dir = 'static/model' 
+    #calibrator = None
+    model_dir = '/work2/jcintineo/torcnn/tests/2011-19/test07'
+    calibrator = '/work2/jcintineo/torcnn/tests/2011-19/test07/tornado_calibrator_isotonic.joblib'
     process_events(
         my_events, 
         model_path=f'{model_dir}/fit_conv_model.keras',
         config_path=f'{model_dir}/model_config.pkl',
-        out_dir='./tornado_plots/KS_20260604',
-        run_shap=False,
+        out_dir='./tornado_plots/OK_20260424',
+        calibrator=calibrator,
+        run_shap=True,
         top_two_only=True,
     )
