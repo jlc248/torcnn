@@ -239,6 +239,11 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                 n_rays = target_sweep.azimuth['data'].shape[0]
                 local_az_inds = np.arange(local_az_idx - hs[0], local_az_idx + hs[0]) % n_rays
                 local_rng_slice = slice(local_gate_idx - hs[1], local_gate_idx + hs[1])
+                # For zoom-in (for imaging)
+                # Hard-coded h[0]//2 and h[1]//s
+                local_az_inds_zoom = np.arange(local_az_idx - hs[0]//2, local_az_idx + hs[0]//2) % n_rays
+                local_rng_slice_zoom = slice(local_gate_idx - hs[1]//2, local_gate_idx + hs[1]//2)
+
                 # Fix if too close to radar, fill with 0s
                 if local_rng_slice.start < 0:
                     nfill_rng = local_rng_slice.start * -1
@@ -270,6 +275,11 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
                         plot_dict['az_upper'] = target_sweep.azimuth['data'][local_az_inds[-1]]
                         plot_dict['rng_lower'] = target_sweep.range['data'][local_rng_slice].min()/1000.
                         plot_dict['rng_upper'] = target_sweep.range['data'][local_rng_slice].max()/1000.
+                        # For zoom-in
+                        plot_dict['az_lower_zoom'] = target_sweep.azimuth['data'][local_az_inds_zoom[0]]
+                        plot_dict['az_upper_zoom'] = target_sweep.azimuth['data'][local_az_inds_zoom[-1]]
+                        plot_dict['rng_lower_zoom'] = target_sweep.range['data'][local_rng_slice_zoom].min()/1000.
+                        plot_dict['rng_upper_zoom'] = target_sweep.range['data'][local_rng_slice_zoom].max()/1000.
 
                 # Normalize
                 vmin, vmax = bsinfo[varname]['vmin'], bsinfo[varname]['vmax']
@@ -299,21 +309,18 @@ def get_sector_data(radar, lat, lon, raddt, hs, inputs, bsinfo):
     return model_inputs, plot_dict, missing_mask
 
 #---------------------------------------------------------------------------------------------------------
-def plot_importance_maps(shap_values, input_tensor, channel_names, out_path, only_top_two=False):
+def plot_importance_maps(importance_values, input_tensor, channel_names, out_path, only_top_two=False):
     """
     Plots the spatial distribution of SHAP values for each radar channel.
     """
-    # shap_values[0] corresponds to the 'radar' input [batch, H, W, Channels]
-    # We take [0] for the first (and only) sample in the batch
-    sv = shap_values[0][0] 
+    
     img = input_tensor['radar'][0]
     
-    n_channels = sv.shape[-1]
+    n_channels = importance_values.shape[-1]
     
     # Calculate global importance per channel to find "Top Two"
     # We use mean absolute SHAP value as the importance metric
-    print(shap_values.shape);sys.exit()
-    importance = [np.abs(sv[:, :, i]).mean() for i in range(n_channels)]
+    importance = [np.abs(importance_values[:, :, i]).mean() for i in range(n_channels)]
     indices = np.argsort(importance)[::-1] # Sort descending
     
     if only_top_two:
@@ -327,19 +334,19 @@ def plot_importance_maps(shap_values, input_tensor, channel_names, out_path, onl
     for i, idx in enumerate(indices):
         ax = axes[0, i]
         # Calculate a symmetric vmin/vmax for the SHAP heatmap
-        vmax = np.max(np.abs(sv[:, :, idx])) * 0.75
+        vmax = np.max(np.abs(importance_values[:, :, idx])) * 0.75
         
         # Plot the SHAP values as a heatmap
-        im = ax.imshow(sv[:, :, idx], cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+        im = ax.imshow(importance_values[:, :, idx], cmap='RdBu_r', vmin=-vmax, vmax=vmax)
         
         # Optional: Overlay a contour of the original data (e.g., Reflectivity) 
         # to provide context if the channel is recognizable
-        ax.set_title(f"{channel_names[idx]}\nMean |SHAP|: {importance[idx]:.4f}")
+        ax.set_title(f"{channel_names[idx]}\nMean |IMPORTANCE|: {importance[idx]:.4f}")
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         ax.axis('off')
 
     plt.tight_layout()
-    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
 
 #---------------------------------------------------------------------------------------------------------
@@ -389,7 +396,7 @@ def get_integrated_gradients(model, input_tensor, baseline=None, steps=50, targe
 #---------------------------------------------------------------------------------------------------------
 # --- MAIN PIPELINE ---
 
-def process_events(event_list, model_path, config_path, out_dir, calibrator=None, run_shap=False, top_two_only=False):
+def process_events(event_list, model_path, config_path, out_dir, calibrator=None, run_importance=False, top_two_only=False):
     # If calibrator, load
     if calibrator:
         calibrator_obj = joblib.load(calibrator)    
@@ -442,30 +449,8 @@ def process_events(event_list, model_path, config_path, out_dir, calibrator=None
             #print(tensors['radar'].shape)
             #sys.exit()
 
-            # Generate SHAP values
-            if run_shap:
-               # SHAP Explainer needs a function that takes a numpy array and returns a prediction
-               # def f(x):
-               #     # Ensure the input is float32 for the model
-               #     return conv_model.predict(x.astype(np.float32), verbose=0)
-
-               # # Define the Masker
-               # ## This tells SHAP how to "hide" pixels. We'll use a "blur" 
-               # ## approach which is often better for spatial features than just solid black.
-               # ## You can also use: masker = shap.maskers.Image("zeros", shape=tensors['radar'][0].shape)
-               # masker = shap.maskers.Image("blur(10,10)", shape=tensors['radar'][0].shape)
-
-               # # Create the Explainer
-               # explainer = shap.Explainer(f, masker)               
-
-               # # Calculate SHAP values
-               # # max_evals: higher = better quality but slower. 500 is a good starting point.
-               # # batch_size: increase this if you have a good GPU to speed up the process.
-               # shap_results = explainer(tensors['radar'], max_evals=5000, batch_size=512)
-
-               # shap_map_data = shap_results.values[0][...,0]
-
-               # plt.imshow(shap_map_data[...,0])
+            # Generate importance values
+            if run_importance:
 
                 baseline = pickle.load(open('static/ig_background_Z-V-Rho-SW-range-mask.pkl', 'rb'))
                 ig_map = get_integrated_gradients(conv_model,
@@ -474,6 +459,14 @@ def process_events(event_list, model_path, config_path, out_dir, calibrator=None
                                                   steps=50,
                                                   target_logits=True
                 )
+                # Add IGs to plot_data
+                for kk, inp in enumerate(inputs):
+                    for ii, chan in enumerate(inp):
+                        if kk == 0:  
+                            try:
+                                plot_data[f"{chan}_importance"] = {"data":ig_map[..., ii]}
+                            except KeyError:
+                                pass
                 
                 # 2. Sum up everything (all pixels, all NEXRAD channels)
                 #total_ig_sum = np.sum(ig_map)
@@ -492,21 +485,36 @@ def process_events(event_list, model_path, config_path, out_dir, calibrator=None
                 #plt.imshow(ig_map[...,1], vmin=vmin, vmax=vmax, cmap='RdBu_r')
                 #plt.show()
                 
-                # Using GradientExplainer
-                ## Background (10-20 samples of zeros is standard)
-                #background = np.zeros((10, 128, 256, 7))
+                # Plot the IGs
+                imp_fname = f"{out_dir}/IG_{event['radar']}_{event['time'].strftime('%Y%m%d_%H%M%S')}.png"
+                #plot_importance_maps(ig_map, tensors, channel_names, shap_fname, only_top_two=top_two_only)
+                fig = plt.figure(figsize=(14, 6)) # (14,6) for 4 vars, (7,6) for 2 vars
+                plot_channels = ['Reflectivity', 'Velocity', 'RhoHV', 'SpectrumWidth', 'Reflectivity_importance',
+                                 'Velocity_importance', 'RhoHV_importance', 'SpectrumWidth_importance']
+                rad_utils.plot_radar(
+                    plot_data,
+                    channels=plot_channels,
+                    fig=fig,
+                    n_rows=2,
+                    n_cols=4,
+                    missing_mask=missing_mask,
+                    zoom_in=True,
+                    include_title=False,
+                    include_cbar=False,
+                    full_ppi=False,
+                )
 
-                #explainer = shap.GradientExplainer(bda x: conv_model(x)), background)
+                # Add title
+                time_str = event['time'].strftime('%Y-%m-%d %H:%M')
+                plt.suptitle(
+                    f"Radar: {event['radar']} | {time_str} UTC\n"
+                    f"Lat: {event['lat']}, Lon: {event['lon']} | Tornado Prob: {prob:.1%}",
+                    fontsize=12, y=0.97
+                )
 
-                ## Explain (This will give you a 128x256 result immediately)
-                #shap_values = explainer.shap_values(tensors['radar'])               
- 
-                #plt.imshow(shap_values[0,...,0])
-                #plt.show()
-
-                shap_fname = f"{out_dir}/IG_{event['radar']}_{event['time'].strftime('%Y%m%d_%H%M%S')}.png"
-                plot_importance_maps(ig_map, tensors, channel_names, shap_fname, only_top_two=top_two_only)
-                logger.info(f"Saved importance plot to {shap_fname}")
+                # Save Image
+                plt.savefig(imp_fname, dpi=300, bbox_inches='tight')
+                logger.info(f"Saved importance plot to {imp_fname}")
 
 
             # Create the Plot
@@ -534,7 +542,7 @@ def process_events(event_list, model_path, config_path, out_dir, calibrator=None
             
             # Save Image
             fname = f"{out_dir}/{event['radar']}_{event['time'].strftime('%Y%m%d_%H%M%S')}.png"
-            plt.savefig(fname, dpi=200, bbox_inches='tight')
+            plt.savefig(fname, dpi=300, bbox_inches='tight')
             plt.close(fig)
             
             logger.info(f"Saved prediction plot to {fname}")
@@ -543,6 +551,12 @@ def process_events(event_list, model_path, config_path, out_dir, calibrator=None
             logger.error(f"Failed to process event at {event['time']}: {e}", exc_info=True)
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+
     # Your list of specific dates/locations
     my_events = [
     #    {'time': datetime(2026, 4, 2, 20, 4), 'lat': 40.95, 'lon': -92.58, 'radar': 'KDVN'},
@@ -551,7 +565,20 @@ if __name__ == "__main__":
     #    {'time': datetime(2026, 4, 2, 21, 23), 'lat': 41.51, 'lon': -91.458, 'radar': 'KDVN'},
     #    {'time': datetime(2026,5,26,0,27,47), 'lat': 31.232, 'lon':-85.314, 'radar':'KEOX'},
     #     {'time': datetime(2026,6,4,22,13,0), 'lat': 39.297, 'lon':-96.823, 'radar':'KTWX'},
+         # Enid OK tornado
+         {'time': datetime(2026,4,24,1,1,30), 'lat':36.316, 'lon':-97.976, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,3,4), 'lat':36.326, 'lon':-97.942, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,4,45), 'lat':36.3218, 'lon':-97.957, 'radar':'KVNX'},
          {'time': datetime(2026,4,24,1,6,39), 'lat':36.32, 'lon':-97.942, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,7,58), 'lat':36.325, 'lon':-97.934, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,9,32), 'lat':36.326, 'lon':-97.929, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,11,32), 'lat':36.331, 'lon':-97.921, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,12,58), 'lat':36.332, 'lon':-97.912, 'radar':'KVNX'}, 
+         {'time': datetime(2026,4,24,1,14,14), 'lat':36.333, 'lon':-97.901, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,15,46), 'lat':36.333, 'lon':-97.896, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,17,24), 'lat':36.336, 'lon':-97.893, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,19,18), 'lat':36.343, 'lon':-97.881, 'radar':'KVNX'},
+         {'time': datetime(2026,4,24,1,20,37), 'lat':36.347, 'lon':-97.873, 'radar':'KVNX'},
     #     {'time': datetime(2026,6,30,15,40), 'lat':40.277, 'lon':-86.127, 'radar':'KIND'}, # IG BASELINE
     ]
    
@@ -565,6 +592,6 @@ if __name__ == "__main__":
         config_path=f'{model_dir}/model_config.pkl',
         out_dir='./tornado_plots/OK_20260424',
         calibrator=calibrator,
-        run_shap=True,
-        top_two_only=True,
+        run_importance=True,
+        top_two_only=True, #non functional
     )

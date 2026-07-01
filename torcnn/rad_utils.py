@@ -178,17 +178,18 @@ def plot_cartesian(file_path,
 #-----------------------------------------------------------------------------------------------
 def get_img_info(c):
     return {
-        'Velocity':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
-        'AliasedVelocity':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
-        'AliasedVelocity_vda':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
-        'AliasedVelocity_pyart':{'cmap':'PiYG', 'vmin':-50, 'vmax':50, 'units':'m/s'},
+        'Velocity':{'cmap':'PiYG_r', 'vmin':-30, 'vmax':30, 'units':'m/s'},
+        'AliasedVelocity':{'cmap':'PiYG_r', 'vmin':-30, 'vmax':30, 'units':'m/s'},
+        'AliasedVelocity_vda':{'cmap':'PiYG_r', 'vmin':-30, 'vmax':30, 'units':'m/s'},
+        'AliasedVelocity_pyart':{'cmap':'PiYG_r', 'vmin':-30, 'vmax':30, 'units':'m/s'},
         'PhiDP':{'cmap':'gnuplot', 'vmin':0, 'vmax':360, 'units':'deg'},
         'RhoHV':{'cmap':'rainbow', 'vmin':0.45, 'vmax':1, 'units':'correlation'},
-        'SpectrumWidth':{'cmap':'cubehelix', 'vmin':0, 'vmax':10, 'units':'m/s'},
+        'SpectrumWidth':{'cmap':'cubehelix', 'vmin':0, 'vmax':20, 'units':'m/s'},
         'AzShear':{'cmap':'bwr', 'vmin':-0.02, 'vmax':0.02, 'units':'1/s'},
-        'DivShear':{'cmap':'PiYG', 'vmin':-0.02, 'vmax':0.02, 'units':'1/s'},
+        'DivShear':{'cmap':'PiYG_r', 'vmin':-0.02, 'vmax':0.02, 'units':'1/s'},
         'Reflectivity':{'cmap':NWScmap, 'vmin':-10, 'vmax':75, 'units':'dBZ'},
         'Zdr':{'cmap':'Spectral_r', 'vmin':-5, 'vmax':5, 'units':'dB'},
+        
     }.get(c,'')
 
 #-----------------------------------------------------------------------------------------------
@@ -487,12 +488,27 @@ def dealias_velocity_pyart(raddt: datetime,
     
     return final_dvel, radar, idx
 #-----------------------------------------------------------------------------------------------
+def extract_middle_quarter(arr):
+    h, w = arr.shape
+    
+    # Half the height and width gives 25% of the total area (0.5 * 0.5 = 0.25)
+    new_h, new_w = h // 2, w // 2
+    
+    # Calculate starting indices
+    start_h = (h - new_h) // 2
+    start_w = (w - new_w) // 2
+    
+    # Return the sliced view
+    return arr[start_h : start_h + new_h, start_w : start_w + new_w]
+#-----------------------------------------------------------------------------------------------
 def plot_radar(
         data: dict,
         channels: list=['Reflectivity','Velocity'],
         fig:plt.Figure=None,
         include_cbar:bool=False,
         include_title:bool=True,
+        zoom_in:bool=False,
+        missing_mask:np.ndarray=None,
         n_rows:int=None,
         n_cols:int=None,
         full_ppi: bool=False,
@@ -505,10 +521,12 @@ def plot_radar(
         fig = plt.figure()
 
     for k, c in enumerate(channels):
+        axes = []
         if n_rows is None:
             ax = fig.add_subplot(1, len(channels), k+1, polar=True)
         else:
             ax = fig.add_subplot(n_rows, n_cols, k+1, polar=True)
+        axes.append(ax)
 
         ax.set_theta_zero_location('N') # radar convention
         ax.set_theta_direction(-1)
@@ -516,37 +534,79 @@ def plot_radar(
         ax.grid(False)
         
         info = get_img_info(c)
-        cmap = info['cmap']
+       
+        try: 
+            cmap = info['cmap']
+        except TypeError:
+            # importance plots
+            cmap = 'bwr'
         if isinstance(cmap, str):
             cmap = plt.get_cmap(cmap)
-        if c in ['Reflectivity', 'Zdr', 'RhoHV', 'PhiDP']:
+        if c in ['Reflectivity', 'Zdr', 'RhoHV', 'PhiDP', 'Reflectivity_importance', 'Zdr_importance', 'RhoHV_importance', 'PhiDP_importance']:
             cmap.set_bad(color='white') 
-        elif c in ['Velocity', 'AliasedVelocity', 'AliasedVelocity_vda', 'AliasedVelocity_pyart', 'SpectrumWidth', 'AzShear', 'DivShear']:
+        elif c in ['Velocity', 'AliasedVelocity', 'AliasedVelocity_vda', 'AliasedVelocity_pyart', 'SpectrumWidth', 'AzShear', 'DivShear',
+                   'Velocity_importance', 'SpectrumWidth_importance']:
             cmap.set_bad(color='purple')
+
+
 
         if full_ppi:
             R, T = np.meshgrid(data[c]['ranges'], np.deg2rad(data[c]['azimuths']))
             im = ax.pcolormesh(T, R, data[c]['data'], shading='nearest', cmap=cmap, vmin=info['vmin'], vmax=info['vmax'])
         else:
-            if data['az_lower'] > data['az_upper']:
-                az_lower_to_use=data['az_lower']-360
+            if zoom_in:
+                if data['az_lower_zoom'] > data['az_upper_zoom']:
+                    az_lower_to_use=data['az_lower_zoom']-360
+                else:
+                    az_lower_to_use=data['az_lower_zoom']
+                az_min  = np.float32(az_lower_to_use) * np.pi/180
+                az_max = np.float32(data['az_upper_zoom']) * np.pi/180
+                rmin = np.float32(data['rng_lower_zoom'])
+                rmax = np.float32(data['rng_upper_zoom'])
+                n_az_patch, n_rng_patch = data[c]['data'].shape
+                # Hard-coding middle 25% zoom-in (see predict_from_aws.py, e.g.)
+                n_az_patch = n_az_patch // 2
+                n_rng_patch = n_rng_patch // 2
             else:
-                az_lower_to_use=data['az_lower']
-            az_min  = np.float32(az_lower_to_use) * np.pi/180
-            az_max = np.float32(data['az_upper']) * np.pi/180
-            rmin = np.float32(data['rng_lower'])
-            rmax = np.float32(data['rng_upper'])
-
-            n_az_patch, n_rng_patch = data[c]['data'].shape
+                if data['az_lower'] > data['az_upper']:
+                    az_lower_to_use=data['az_lower']-360
+                else:
+                    az_lower_to_use=data['az_lower']
+                az_min  = np.float32(az_lower_to_use) * np.pi/180
+                az_max = np.float32(data['az_upper']) * np.pi/180
+                rmin = np.float32(data['rng_lower'])
+                rmax = np.float32(data['rng_upper'])
+                n_az_patch, n_rng_patch = data[c]['data'].shape
 
             T = np.linspace(az_min,az_max,n_az_patch)
             R = np.linspace(rmin,rmax,n_rng_patch)
             R,T = np.meshgrid(R,T)
 
-            im = ax.pcolormesh(T, R-rmin, data[c]['data'], shading='nearest', cmap=cmap, vmin=info['vmin'], vmax=info['vmax'])
+            if missing_mask is not None and (c.startswith('Velocity') or c.startswith('Aliased')):
+                data[c]['data'][missing_mask] = 0
+            if c.endswith('importance'):
+                # For this datum only
+                #vmax = data[c]['data'].max() * 0.75; vmin = vmax*-1
+                # Find vmax for all importance chans
+                vmax = 0
+                for chan in channels:
+                    if chan.endswith('importance'):
+                        tmp_max = data[chan]['data'].max()
+                        if tmp_max > vmax:
+                            vmax = tmp_max
+                vmax *= 0.75; vmin = vmax*-1
+            
+            else:
+                vmax = info['vmax']; vmin = info['vmin']   
+
+            if zoom_in:
+                # Hard-coding middle 25% zoom-in
+                im = ax.pcolormesh(T, R-rmin, extract_middle_quarter(data[c]['data']), shading='nearest', cmap=cmap, vmin=vmin, vmax=vmax)
+            else:
+                im = ax.pcolormesh(T, R-rmin, data[c]['data'], shading='nearest', cmap=cmap, vmin=vmin, vmax=vmax)
             ax.set_rorigin(-rmin)
             ax.set_thetalim([az_min,az_max])
-
+        
 
         ax.set_xticklabels([]) # turns off ticks
         ax.set_yticklabels([])
@@ -580,7 +640,11 @@ def plot_radar(
         #            tt_labs.append(str(int(round(theta_lab))) + '$^\circ$')
         #    ax.set_thetagrids(tt, labels=tt_labs, fontsize=fs)
 
-        ax.grid(linestyle=":", color='black')
+        if c == 'SpectrumWidth':
+            ax.grid(linestyle=":", color='white')
+        else:
+            ax.grid(linestyle=":", color='black')
+        
  
         if include_cbar:
             if c == 'AliasedVelocity_pyart':
@@ -593,6 +657,18 @@ def plot_radar(
         if include_title:
             ax.set_title(c)
 
+    # Special case if last plot is importance
+    if channels[-1].endswith('importance'):
+        # 1. Push the polar subplots up slightly to guarantee clear white space at the bottom
+        fig.subplots_adjust(bottom=0.15)
+        
+        # 2. Define a dedicated rectangle for the colorbar
+        # Format: [left_margin, bottom_margin, width, height] as percentages of the figure (0 to 1)
+        cbar_ax = fig.add_axes([0.25, 0.07, 0.50, 0.03])
+        
+        # 3. Create the colorbar using 'cax' (explicit axis)
+        cbar = fig.colorbar(im, cax=cbar_ax, orientation='horizontal')
+        cbar.set_label('Importance (IGs) [ ]')
 #-----------------------------------------------------------------------------------------------
 def plot_from_wdss2(file_path,
                     varname,

@@ -7,6 +7,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from torp_dataset import TORPDataset2
+from scipy.stats import randint
+from sklearn.model_selection import RandomizedSearchCV
 import pickle
 import io
 import glob
@@ -81,7 +83,7 @@ def mark_and_drop_rows(df):
 
 #------------------------------------------------------------------------------------------
 
-def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
+def train_and_save_model(ds_orig, target_column, output_dir, n_jobs, optimize=False):
     """
     Trains a RandomForestClassifier using a specified number of CPUs and saves the model.
 
@@ -90,8 +92,12 @@ def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
         target_column (str): The name of the target variable column.
         output_dir (str): The directory where the trained model will be saved.
         n_jobs (int): The number of CPU cores to use. Use -1 to use all available cores.
+        optimize (bool): Run hyperparameter optimization?
     """
-   
+  
+    # Create the output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+ 
     # Remove any rows within 100km and 60min of a tornado report 
     ds = ds_orig #mark_and_drop_rows(ds_orig)
 
@@ -133,37 +139,106 @@ def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
     # Define imputer
     imputer = SimpleImputer(strategy='mean')
 
-    # Define the Random Forest Classifier with the specified parameters
-    rf_classifier = RandomForestClassifier(
-        bootstrap=True,
-        class_weight='balanced_subsample',
-        criterion='entropy',
-        max_depth=10,
-        max_features=None,
-        max_leaf_nodes=None,
-        min_impurity_decrease=0.0,
-        min_samples_leaf=3,
-        min_samples_split=5,
-        min_weight_fraction_leaf=0,
-        n_estimators=500,
-        oob_score=False,
-        random_state=None,
-        warm_start=False,
-        n_jobs=n_jobs  # Use the specified number of jobs
-    )
+    
+    if optimize:
+        # Base classifier setup
+        # Note: Changed max_features to 'sqrt' for crucial speedups on large data.
+        # Note: Lowered default n_estimators for the search; you can scale it up later.
+        rf_base = RandomForestClassifier(
+            bootstrap=True,
+            class_weight="balanced_subsample",
+            criterion="entropy",
+            n_jobs=1,  
+            random_state=803,
+        )
 
-    # Create the pipeline
-    pipeline = Pipeline(steps=[
-        ('imputer', imputer),
-        ('classifier', rf_classifier)
-    ])
+        # Bundle them into a Pipeline
+        # The string names ('imputer', 'classifier') dictate the parameter prefixes below
+        pipeline = Pipeline([("imputer", imputer), ("classifier", rf_base)])
 
-    # Train the classifier
-    print(f"Training the Random Forest Classifier using {n_jobs} cores...")
-    pipeline.fit(X_train, y_train)
-    print("Training complete.")
+        # Define the Search Space (Param Distributions)
+        # Using distributions or lists for RandomizedSearchCV to sample from
+        param_dist = {
+            "classifier__n_estimators": [100, 200, 300, 400, 500, 600],  # Keep it leaner during the search
+            "classifier__max_depth": [5, 10, 20, 30], 
+            "classifier__max_samples": [0.3, 0.5, 0.7, 0.9],
+            "classifier__min_samples_split": randint(2, 11),  # Uniformly sample between 2 and 10
+            "classifier__min_samples_leaf": randint(1, 5),  # Uniformly sample between 1 and 4
+            "classifier__max_features": [
+                "sqrt",
+                "log2",
+            ],  # Avoid 'None' here unless feature count is tiny
+        }
+        print('here1')
+        # Set up the Randomized Search
+        # Given millions of rows, we tune n_iter and cv down to keep execution times sane.
+        # Total tasks = 65 x 3 (CV) = 195 total fits (almost n_jobs=200)
+        random_search = RandomizedSearchCV(
+            estimator=pipeline,
+            param_distributions=param_dist,
+            n_iter=80,  # Number of parameter settings sampled
+            cv=3,  # 3-fold cross-validation instead of 5 to save time
+            scoring="f1_weighted",  
+            random_state=803,
+            n_jobs=40,  # Parallelize across CV folds
+            verbose=2,  # Prints progress so you know it hasn't frozen
+        )
 
-    # --- Start of the new validation code ---
+        # Run the optimization
+        random_search.fit(X_train, y_train)
+        
+        # Extract the best model and parameters
+        print("Best Parameters found:", random_search.best_params_)
+        pipeline = random_search.best_estimator_
+
+        # Save the pipeline to a file
+        model_filename = os.path.join(output_dir, "optimized_rf_pipeline.joblib")
+        joblib.dump(pipeline, model_filename, compress=3)
+        print(f"Pipeline successfully saved to '{model_filename}'")
+
+    else:
+        print('here2')
+        # Define the Random Forest Classifier with the specified parameters
+        rf_classifier = RandomForestClassifier(
+            bootstrap=True,
+            class_weight='balanced_subsample',
+            criterion='entropy',
+            max_depth=10,
+            max_features=None,
+            max_leaf_nodes=None,
+            min_impurity_decrease=0.0,
+            min_samples_leaf=3,
+            min_samples_split=5,
+            min_weight_fraction_leaf=0,
+            n_estimators=500,
+            oob_score=False,
+            random_state=None,
+            warm_start=False,
+            n_jobs=n_jobs  # Use the specified number of jobs
+        )
+    
+        # Create the pipeline
+        pipeline = Pipeline(steps=[
+            ('imputer', imputer),
+            ('classifier', rf_classifier)
+        ])
+    
+        # Train the classifier
+        print(f"Training the Random Forest Classifier using {n_jobs} cores...")
+        pipeline.fit(X_train, y_train)
+        print("Training complete.")
+
+        # Define the full path to save the model
+        model_filename = "random_forest_pipeline.joblib"
+        model_path = os.path.join(output_dir, model_filename)
+
+        # Save the trained pipeline using joblib
+        # The pipeline object contains both the imputer (with learned means) and the classifier.
+        joblib.dump(pipeline, model_path)
+        print(f"Pipeline successfully saved to '{model_path}'")
+
+
+
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, precision_recall_curve, auc
 
     print("\nEvaluating model performance on the validation set...")
@@ -188,19 +263,6 @@ def train_and_save_model(ds_orig, target_column, output_dir, n_jobs):
    
 
 
-    # Create the output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Define the full path to save the model
-    model_filename = "random_forest_pipeline.joblib"
-    model_path = os.path.join(output_dir, model_filename)
-
-    # Save the trained pipeline using joblib
-    # The pipeline object contains both the imputer (with learned means) and the classifier.
-    joblib.dump(pipeline, model_path)
-    print(f"Pipeline successfully saved to '{model_path}'")
-
-
 def main():
     """
     Main function to handle command-line arguments and run the training pipeline.
@@ -219,6 +281,11 @@ def main():
         type=int,
         default=-1,
         help="The number of CPU cores to use for training. Use -1 to use all available cores. Defaults to -1."
+    )
+    parser.add_argument(
+        "--optimize",
+        help="Run hyperparameter optimization.",
+        action="store_true",
     )
 
     args = parser.parse_args()
@@ -247,7 +314,7 @@ def main():
     target = "tornado"
 
     # Run the training pipeline 
-    train_and_save_model(ds_orig, target, args.output_dir, args.n_jobs)
+    train_and_save_model(ds_orig, target, args.output_dir, args.n_jobs, optimize=args.optimize)
 
 if __name__ == "__main__":
      main()
